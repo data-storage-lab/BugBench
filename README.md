@@ -10,6 +10,6 @@ The repository contains two files:
 
 We hope that our bugbench is helpful and could contribute to the future work.
 
-Please feel free to direct your concerns or feedback to: Duo Zhang (Duozhang@iastate.edu)
+Please feel free to direct your concerns or feedback to: Duo Zhang (duozhang@iastate.edu)
 
 
