@@ -18,7 +18,7 @@
     
 #3-BTRFS
     kerenl: 4.4.107-bug16 buggy kerenl
-    kernel: 5.4.128 patched kernel
+    kernel: 4.4.107-patch16 patched kernel
 
 #4-BTRFS
     kerenl: 5.4.0-81 buggy kerenl
