@@ -12,13 +12,17 @@
     kernel: 5.4.128 patched kernel
     go through the kernel through recovery mode, otherwiswe the system will hang(do not know the reason)
     run 
-        sudo qemu-system-x86_64 -m 2048 -enable-kvm 1_ext4.qcow2
+        sudo qemu-system-x86_64 -m 2048 -enable-kvm 2_ext4.qcow2
         after go through the system
             sudo ./run.sh
     
 #3-BTRFS
     kerenl: 4.4.107-bug16 buggy kerenl
     kernel: 4.4.107-patch16 patched kernel
+    run 
+        sudo qemu-system-x86_64 -m 2048 -enable-kvm 3_btrfs.qcow2
+        after go through the system
+            sudo ./run.sh
 
 #4-BTRFS
     kerenl: 5.4.0-81 buggy kerenl
