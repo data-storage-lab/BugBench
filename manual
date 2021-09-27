@@ -1,13 +1,23 @@
 #1-EXT4
     kerenl: 5.4.0-81 buggy kerenl
     kernel: 5.4.128 patched kernel
+    go through the kernel through recovery mode, otherwiswe the system will hang(do not know the reason)
+    run 
+        sudo qemu-system-x86_64 -m 2048 -enable-kvm 1_ext4.qcow2
+        after go through the system
+            sudo ./run.sh
 
 #2-EXT4
     kerenl: 5.4.0-81 buggy kerenl
     kernel: 5.4.128 patched kernel
+    go through the kernel through recovery mode, otherwiswe the system will hang(do not know the reason)
+    run 
+        sudo qemu-system-x86_64 -m 2048 -enable-kvm 1_ext4.qcow2
+        after go through the system
+            sudo ./run.sh
     
 #3-BTRFS
-    kerenl: 5.4.0-81 buggy kerenl
+    kerenl: 4.4.107-bug16 buggy kerenl
     kernel: 5.4.128 patched kernel
 
 #4-BTRFS
@@ -27,7 +37,7 @@
     kernel: 5.4.128 patched kernel
     go through the kernel through recovery mode, otherwiswe the system will hang(do not know the reason)
     run 
-        sudo qemu-system-x86_64 -m 2048 -enable-kvm 1_ext4.qcow2
+        sudo qemu-system-x86_64 -m 2048 -enable-kvm 8_blk.qcow2
         after go through the system
             sudo ./wkld
 
