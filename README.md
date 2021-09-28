@@ -1,6 +1,6 @@
 # Bugbench<sup>k</sub>
 
-This repository contains info of images and running process of Bugbench
+This repository contains info of images and running process of Bugbench<sup>k</sub>
 
 We have designed a bugbench to test two general debugging tools: FTrace and PANDA and published our results in our paper "[Benchmarking for Reliability: The Case of Diagnosing Storage Failures]". Our paper was accepted by Bench21 (https://www.benchcouncil.org/bench21/cfp.html).
 
