@@ -1,4 +1,4 @@
-# Bugbench^k
+# Bugbench<sup>k</sub>
 
 This repository contains info of images and running process of Bugbench
 
