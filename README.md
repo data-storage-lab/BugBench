@@ -1,6 +1,6 @@
 # Bugbench<sup>k</sub> </sup>for Observability
 
-This repository contains info of images and running process of Bugbench<sup>k</sub> </sup>.
+This repository contains info of images and running process of Bugbench<sup>k</sub></sup>.
 
 We have designed a Bugbench<sup>k</sub> </sup>to test two general debugging tools: FTrace and PANDA and published our results in our paper "[Benchmarking for Reliability: The Case of Diagnosing Storage Failures]". Our paper was published in BenchCouncil Transactions on Benchmarks, Standards and Evaluation (TBench). (https://www.benchcouncil.org/journal.html).
 
