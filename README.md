@@ -8,7 +8,7 @@ The repository contains two files:
 - Manual file: how to run and use each image.
 - link file: due to storager limits, it is unavailable to upload images to current repository. The link shows how to get images.
 
-We hope that our bugbench is helpful and could contribute to the future work.
+We hope that our initial efforts and the resulting open-source Bugbench<sup>k</sub> </sup> will inspire follow-up research in the communities and help measure and improve system reliability in general
 
 Please feel free to direct your concerns or feedback to: Duo Zhang (duozhang@iastate.edu)
 
