@@ -1,4 +1,4 @@
-# Bugbench<sup>k</sub> for Observability
+# Bugbench<sup>k</sub> for Observability<sup>
 
 This repository contains info of images and running process of Bugbench<sup>k</sub>
 
@@ -6,7 +6,7 @@ We have designed a bugbench to test two general debugging tools: FTrace and PAND
 
 The repository contains two files:
 - Manual file: how to run and use each image.
-- link file: due to storager limits, it is unavailable to upload images to current repository. The link shows the place about how to get images.
+- link file: due to storager limits, it is unavailable to upload images to current repository. The link shows how to get images.
 
 We hope that our bugbench is helpful and could contribute to the future work.
 
