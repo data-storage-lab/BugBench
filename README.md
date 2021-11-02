@@ -1,4 +1,4 @@
-# Bugbench<sup>k</sub> </sup>for Observability
+# BugBench<sup>k</sub> </sup>for Observability
 
 This repository contains info of images and running process of Bugbench<sup>k</sub></sup>.
 
