@@ -1,0 +1,39 @@
+From 86b0624e42d03a424e9571b8591d191c436f9af1 Mon Sep 17 00:00:00 2001
+From: Jan Kara <jack@suse.cz>
+Date: Wed, 11 May 2016 11:58:49 +0200
+Subject: [PATCH 559437/911378] ext2: Avoid DAX zeroing to corrupt data
+
+Currently ext2 zeroes any data blocks allocated for DAX inode however it
+still returns them as BH_New. Thus DAX code zeroes them again in
+dax_insert_mapping() which can possibly overwrite the data that has been
+already stored to those blocks by a racing dax_io(). Avoid marking
+pre-zeroed buffers as new.
+
+Reviewed-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Signed-off-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Vishal Verma <vishal.l.verma@intel.com>
+---
+ fs/ext2/inode.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/ext2/inode.c b/fs/ext2/inode.c
+index 038d0ed5f565..9a14af3b1a69 100644
+--- a/fs/ext2/inode.c
++++ b/fs/ext2/inode.c
+@@ -745,11 +745,11 @@ static int ext2_get_blocks(struct inode *inode,
+ 			mutex_unlock(&ei->truncate_mutex);
+ 			goto cleanup;
+ 		}
+-	}
++	} else
++		set_buffer_new(bh_result);
+ 
+ 	ext2_splice_branch(inode, iblock, partial, indirect_blks, count);
+ 	mutex_unlock(&ei->truncate_mutex);
+-	set_buffer_new(bh_result);
+ got_it:
+ 	map_bh(bh_result, inode->i_sb, le32_to_cpu(chain[depth-1].key));
+ 	if (count > blocks_to_boundary)
+-- 
+2.17.1
+

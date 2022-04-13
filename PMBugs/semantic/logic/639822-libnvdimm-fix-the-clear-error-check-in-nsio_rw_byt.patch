@@ -1,0 +1,38 @@
+From 7e5a21dfe5524a85705d3bc7b540c849cc13e9a1 Mon Sep 17 00:00:00 2001
+From: Vishal Verma <vishal.l.verma@intel.com>
+Date: Fri, 30 Jun 2017 18:32:52 -0600
+Subject: [PATCH 639822/911378] libnvdimm: fix the clear-error check in
+ nsio_rw_bytes
+
+A leftover from the 'bandaid' fix that disabled BTT error clearing in
+rw_bytes resulted in an incorrect check. After we converted these checks
+over to use the NVDIMM_IO_ATOMIC flag, the ndns->claim check was both
+redundant, and incorrect. Remove it.
+
+Fixes: 3ae3d67ba705 ("libnvdimm: add an atomic vs process context flag to rw_bytes")
+Cc: <stable@vger.kernel.org>
+Cc: Dave Jiang <dave.jiang@intel.com>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/claim.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/claim.c b/drivers/nvdimm/claim.c
+index 8d23f68737d9..f8ad92b4dcd2 100644
+--- a/drivers/nvdimm/claim.c
++++ b/drivers/nvdimm/claim.c
+@@ -289,8 +289,7 @@ static int nsio_rw_bytes(struct nd_namespace_common *ndns,
+ 		 * work around this collision.
+ 		 */
+ 		if (IS_ALIGNED(offset, 512) && IS_ALIGNED(size, 512)
+-				&& !(flags & NVDIMM_IO_ATOMIC)
+-				&& !ndns->claim) {
++				&& !(flags & NVDIMM_IO_ATOMIC)) {
+ 			long cleared;
+ 
+ 			cleared = nvdimm_clear_poison(&ndns->dev,
+-- 
+2.17.1
+

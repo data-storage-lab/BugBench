@@ -1,0 +1,132 @@
+From 6ec689542b5bc516187917d49b112847dfb75b0b Mon Sep 17 00:00:00 2001
+From: Vishal Verma <vishal.l.verma@intel.com>
+Date: Wed, 29 Jul 2015 14:58:09 -0600
+Subject: [PATCH 504688/911378] libnvdimm, btt: write and validate parent_uuid
+
+When a BTT is instantiated on a namespace it must validate the namespace
+uuid matches the 'parent_uuid' stored in the btt superblock. This
+property enforces that changing the namespace UUID invalidates all
+former BTT instances on that storage. For "IO namespaces" that don't
+have a label or UUID, the parent_uuid is set to zero, and this
+validation is skipped. For such cases, old BTTs have to be invalidated
+by forcing the namespace to raw mode, and overwriting the BTT info
+blocks.
+
+Based on a patch by Dan Williams <dan.j.williams@intel.com>
+
+Signed-off-by: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/btt.c            |  2 ++
+ drivers/nvdimm/btt_devs.c       | 15 ++++++++++++++-
+ drivers/nvdimm/namespace_devs.c | 20 ++++++++++++++++++++
+ drivers/nvdimm/nd.h             |  1 +
+ 4 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/btt.c b/drivers/nvdimm/btt.c
+index 6567746aa315..19588291550b 100644
+--- a/drivers/nvdimm/btt.c
++++ b/drivers/nvdimm/btt.c
+@@ -733,6 +733,7 @@ static int btt_arena_write_layout(struct arena_info *arena)
+ 	int ret;
+ 	struct btt_sb *super;
+ 	struct nd_btt *nd_btt = arena->nd_btt;
++	const u8 *parent_uuid = nd_dev_to_uuid(&nd_btt->ndns->dev);
+ 
+ 	ret = btt_map_init(arena);
+ 	if (ret)
+@@ -748,6 +749,7 @@ static int btt_arena_write_layout(struct arena_info *arena)
+ 
+ 	strncpy(super->signature, BTT_SIG, BTT_SIG_LEN);
+ 	memcpy(super->uuid, nd_btt->uuid, 16);
++	memcpy(super->parent_uuid, parent_uuid, 16);
+ 	super->flags = cpu_to_le32(arena->flags);
+ 	super->version_major = cpu_to_le16(arena->version_major);
+ 	super->version_minor = cpu_to_le16(arena->version_minor);
+diff --git a/drivers/nvdimm/btt_devs.c b/drivers/nvdimm/btt_devs.c
+index 18e0663e922c..242ae1c550ad 100644
+--- a/drivers/nvdimm/btt_devs.c
++++ b/drivers/nvdimm/btt_devs.c
+@@ -342,24 +342,37 @@ struct device *nd_btt_create(struct nd_region *nd_region)
+ 	return dev;
+ }
+ 
++static bool uuid_is_null(u8 *uuid)
++{
++	static const u8 null_uuid[16];
++
++	return (memcmp(uuid, null_uuid, 16) == 0);
++}
++
+ /**
+  * nd_btt_arena_is_valid - check if the metadata layout is valid
+  * @nd_btt:	device with BTT geometry and backing device info
+  * @super:	pointer to the arena's info block being tested
+  *
+  * Check consistency of the btt info block with itself by validating
+- * the checksum.
++ * the checksum, and with the parent namespace by verifying the
++ * parent_uuid contained in the info block with the one supplied in.
+  *
+  * Returns:
+  * false for an invalid info block, true for a valid one
+  */
+ bool nd_btt_arena_is_valid(struct nd_btt *nd_btt, struct btt_sb *super)
+ {
++	const u8 *parent_uuid = nd_dev_to_uuid(&nd_btt->ndns->dev);
+ 	u64 checksum;
+ 
+ 	if (memcmp(super->signature, BTT_SIG, BTT_SIG_LEN) != 0)
+ 		return false;
+ 
++	if (!uuid_is_null(super->parent_uuid))
++		if (memcmp(super->parent_uuid, parent_uuid, 16) != 0)
++			return false;
++
+ 	checksum = le64_to_cpu(super->checksum);
+ 	super->checksum = 0;
+ 	if (checksum != nd_btt_sb_checksum(super))
+diff --git a/drivers/nvdimm/namespace_devs.c b/drivers/nvdimm/namespace_devs.c
+index fef0dd80d4ad..b18ffea9d85b 100644
+--- a/drivers/nvdimm/namespace_devs.c
++++ b/drivers/nvdimm/namespace_devs.c
+@@ -100,6 +100,26 @@ const char *nvdimm_namespace_disk_name(struct nd_namespace_common *ndns,
+ }
+ EXPORT_SYMBOL(nvdimm_namespace_disk_name);
+ 
++const u8 *nd_dev_to_uuid(struct device *dev)
++{
++	static const u8 null_uuid[16];
++
++	if (!dev)
++		return null_uuid;
++
++	if (is_namespace_pmem(dev)) {
++		struct nd_namespace_pmem *nspm = to_nd_namespace_pmem(dev);
++
++		return nspm->uuid;
++	} else if (is_namespace_blk(dev)) {
++		struct nd_namespace_blk *nsblk = to_nd_namespace_blk(dev);
++
++		return nsblk->uuid;
++	} else
++		return null_uuid;
++}
++EXPORT_SYMBOL(nd_dev_to_uuid);
++
+ static ssize_t nstype_show(struct device *dev,
+ 		struct device_attribute *attr, char *buf)
+ {
+diff --git a/drivers/nvdimm/nd.h b/drivers/nvdimm/nd.h
+index 835263e47bb8..f9615824947b 100644
+--- a/drivers/nvdimm/nd.h
++++ b/drivers/nvdimm/nd.h
+@@ -217,4 +217,5 @@ static inline bool nd_iostat_start(struct bio *bio, unsigned long *start)
+ }
+ void nd_iostat_end(struct bio *bio, unsigned long start);
+ resource_size_t nd_namespace_blk_validate(struct nd_namespace_blk *nsblk);
++const u8 *nd_dev_to_uuid(struct device *dev);
+ #endif /* __ND_H__ */
+-- 
+2.17.1
+

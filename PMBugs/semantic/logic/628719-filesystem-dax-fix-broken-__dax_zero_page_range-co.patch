@@ -1,0 +1,47 @@
+From e84b83b9ee2187817cf895471675f1ccdf64cd53 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Wed, 10 May 2017 19:38:13 -0700
+Subject: [PATCH 628719/911378] filesystem-dax: fix broken
+ __dax_zero_page_range() conversion
+
+The conversion of __dax_zero_page_range() to 'struct dax_operations'
+caused it to frequently fail. The mistake was treating the @size
+parameter as a dax mapping length rather than just a length of the
+clear_pmem() operation. The dax mapping length is assumed to be hard
+coded as PAGE_SIZE.
+
+Without this fix any page unaligned zeroing request will trigger a
+-EINVAL return from bdev_dax_pgoff().
+
+Cc: Jan Kara <jack@suse.com>
+Cc: Christoph Hellwig <hch@lst.de>
+Reported-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Tested-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Fixes: cccbce671582 ("filesystem-dax: convert to dax_direct_access()")
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ fs/dax.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index ce9dc9c3e829..5ee1d212d81f 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -971,12 +971,12 @@ int __dax_zero_page_range(struct block_device *bdev,
+ 		void *kaddr;
+ 		pfn_t pfn;
+ 
+-		rc = bdev_dax_pgoff(bdev, sector, size, &pgoff);
++		rc = bdev_dax_pgoff(bdev, sector, PAGE_SIZE, &pgoff);
+ 		if (rc)
+ 			return rc;
+ 
+ 		id = dax_read_lock();
+-		rc = dax_direct_access(dax_dev, pgoff, PHYS_PFN(size), &kaddr,
++		rc = dax_direct_access(dax_dev, pgoff, 1, &kaddr,
+ 				&pfn);
+ 		if (rc < 0) {
+ 			dax_read_unlock(id);
+-- 
+2.17.1
+

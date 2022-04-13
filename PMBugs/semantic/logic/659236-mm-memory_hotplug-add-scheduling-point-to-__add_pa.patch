@@ -1,0 +1,85 @@
+From f64ac5e6e30668216cf489d73ba8a96e372d78c6 Mon Sep 17 00:00:00 2001
+From: Michal Hocko <mhocko@suse.com>
+Date: Tue, 3 Oct 2017 16:16:16 -0700
+Subject: [PATCH 659236/911378] mm, memory_hotplug: add scheduling point to
+ __add_pages
+
+Patch series "mm, memory_hotplug: fix few soft lockups in memory
+hotadd".
+
+Johannes has noticed few soft lockups when adding a large nvdimm device.
+All of them were caused by a long loop without any explicit cond_resched
+which is a problem for !PREEMPT kernels.
+
+The fix is quite straightforward.  Just make sure that cond_resched gets
+called from time to time.
+
+This patch (of 3):
+
+__add_pages gets a pfn range to add and there is no upper bound for a
+single call.  This is usually a memory block aligned size for the
+regular memory hotplug - smaller sizes are usual for memory balloning
+drivers, or the whole NUMA node for physical memory online.  There is no
+explicit scheduling point in that code path though.
+
+This can lead to long latencies while __add_pages is executed and we
+have even seen a soft lockup report during nvdimm initialization with
+!PREEMPT kernel
+
+  NMI watchdog: BUG: soft lockup - CPU#11 stuck for 23s! [kworker/u641:3:832]
+  [...]
+  Workqueue: events_unbound async_run_entry_fn
+  task: ffff881809270f40 ti: ffff881809274000 task.ti: ffff881809274000
+  RIP: _raw_spin_unlock_irqrestore+0x11/0x20
+  RSP: 0018:ffff881809277b10  EFLAGS: 00000286
+  [...]
+  Call Trace:
+    sparse_add_one_section+0x13d/0x18e
+    __add_pages+0x10a/0x1d0
+    arch_add_memory+0x4a/0xc0
+    devm_memremap_pages+0x29d/0x430
+    pmem_attach_disk+0x2fd/0x3f0 [nd_pmem]
+    nvdimm_bus_probe+0x64/0x110 [libnvdimm]
+    driver_probe_device+0x1f7/0x420
+    bus_for_each_drv+0x52/0x80
+    __device_attach+0xb0/0x130
+    bus_probe_device+0x87/0xa0
+    device_add+0x3fc/0x5f0
+    nd_async_device_register+0xe/0x40 [libnvdimm]
+    async_run_entry_fn+0x43/0x150
+    process_one_work+0x14e/0x410
+    worker_thread+0x116/0x490
+    kthread+0xc7/0xe0
+    ret_from_fork+0x3f/0x70
+  DWARF2 unwinder stuck at ret_from_fork+0x3f/0x70
+
+Fix this by adding cond_resched once per each memory section in the
+given pfn range.  Each section is constant amount of work which itself
+is not too expensive but many of them will just add up.
+
+Link: http://lkml.kernel.org/r/20170918121410.24466-2-mhocko@kernel.org
+Signed-off-by: Michal Hocko <mhocko@suse.com>
+Reported-by: Johannes Thumshirn <jthumshirn@suse.de>
+Tested-by: Johannes Thumshirn <jthumshirn@suse.de>
+Cc: Dan Williams <dan.j.williams@gmail.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ mm/memory_hotplug.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/mm/memory_hotplug.c b/mm/memory_hotplug.c
+index e882cb6da994..23d5bd968950 100644
+--- a/mm/memory_hotplug.c
++++ b/mm/memory_hotplug.c
+@@ -328,6 +328,7 @@ int __ref __add_pages(int nid, unsigned long phys_start_pfn,
+ 		if (err && (err != -EEXIST))
+ 			break;
+ 		err = 0;
++		cond_resched();
+ 	}
+ 	vmemmap_populate_print_last();
+ out:
+-- 
+2.17.1
+

@@ -1,0 +1,58 @@
+From 7c02d53dfe4db08cd7b4d4be8c7f1b801cf8b899 Mon Sep 17 00:00:00 2001
+From: Jane Chu <jane.chu@oracle.com>
+Date: Mon, 3 Aug 2020 16:41:38 -0600
+Subject: [PATCH 878015/911378] libnvdimm/security: the 'security' attr never
+ show 'overwrite' state
+
+'security' attribute displays the security state of an nvdimm.
+During normal operation, the nvdimm state maybe one of 'disabled',
+'unlocked' or 'locked'.  When an admin issues
+  # ndctl sanitize-dimm nmem0 --overwrite
+the attribute is expected to change to 'overwrite' until the overwrite
+operation completes.
+
+But tests on our systems show that 'overwrite' is never shown during
+the overwrite operation. i.e.
+  # cat /sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0012:00/ndbus0/nmem0/security
+  unlocked
+the attribute remain 'unlocked' through out the operation, consequently
+"ndctl wait-overwrite nmem0" command doesn't wait at all.
+
+The driver tracks the state in 'nvdimm->sec.flags': when the operation
+starts, it adds an overwrite bit to the flags; and when the operation
+completes, it removes the bit. Hence security_show() should check the
+'overwrite' bit first, in order to indicate the actual state when multiple
+bits are set in the flags.
+
+Link: https://lore.kernel.org/r/1596494499-9852-2-git-send-email-jane.chu@oracle.com
+Reviewed-by: Dave Jiang <dave.jiang@intel.com>
+Signed-off-by: Jane Chu <jane.chu@oracle.com>
+Signed-off-by: Vishal Verma <vishal.l.verma@intel.com>
+---
+ drivers/nvdimm/dimm_devs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/dimm_devs.c b/drivers/nvdimm/dimm_devs.c
+index 2f0815e15986..61374def5155 100644
+--- a/drivers/nvdimm/dimm_devs.c
++++ b/drivers/nvdimm/dimm_devs.c
+@@ -363,14 +363,14 @@ __weak ssize_t security_show(struct device *dev,
+ {
+ 	struct nvdimm *nvdimm = to_nvdimm(dev);
+ 
++	if (test_bit(NVDIMM_SECURITY_OVERWRITE, &nvdimm->sec.flags))
++		return sprintf(buf, "overwrite\n");
+ 	if (test_bit(NVDIMM_SECURITY_DISABLED, &nvdimm->sec.flags))
+ 		return sprintf(buf, "disabled\n");
+ 	if (test_bit(NVDIMM_SECURITY_UNLOCKED, &nvdimm->sec.flags))
+ 		return sprintf(buf, "unlocked\n");
+ 	if (test_bit(NVDIMM_SECURITY_LOCKED, &nvdimm->sec.flags))
+ 		return sprintf(buf, "locked\n");
+-	if (test_bit(NVDIMM_SECURITY_OVERWRITE, &nvdimm->sec.flags))
+-		return sprintf(buf, "overwrite\n");
+ 	return -ENOTTY;
+ }
+ 
+-- 
+2.17.1
+

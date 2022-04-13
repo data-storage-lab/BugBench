@@ -1,0 +1,256 @@
+From 5a3a2d83cda82df7f8c306df85647d2c368e829a Mon Sep 17 00:00:00 2001
+From: Qiuyang Sun <sunqiuyang@huawei.com>
+Date: Thu, 18 May 2017 11:06:45 +0800
+Subject: [PATCH 640241/911378] f2fs: dax: fix races between page faults and
+ truncating pages
+
+Currently in F2FS, page faults and operations that truncate the pagecahe
+or data blocks, are completely unsynchronized. This can result in page
+fault faulting in a page into a range that we are changing after
+truncating, and thus we can end up with a page mapped to disk blocks that
+will be shortly freed. Filesystem corruption will shortly follow.
+
+This patch fixes the problem by creating new rw semaphore i_mmap_sem in
+f2fs_inode_info and grab it for functions removing blocks from extent tree
+and for read over page faults. The mechanism is similar to that in ext4.
+
+Signed-off-by: Qiuyang Sun <sunqiuyang@huawei.com>
+Reviewed-by: Chao Yu <yuchao0@huawei.com>
+Signed-off-by: Jaegeuk Kim <jaegeuk@kernel.org>
+---
+ fs/f2fs/data.c  |  2 ++
+ fs/f2fs/f2fs.h  |  1 +
+ fs/f2fs/file.c  | 48 +++++++++++++++++++++++++++++++++++++++---------
+ fs/f2fs/super.c |  1 +
+ 4 files changed, 43 insertions(+), 9 deletions(-)
+
+diff --git a/fs/f2fs/data.c b/fs/f2fs/data.c
+index 2ed90f5db832..7d3af48d34a9 100644
+--- a/fs/f2fs/data.c
++++ b/fs/f2fs/data.c
+@@ -1801,8 +1801,10 @@ static void f2fs_write_failed(struct address_space *mapping, loff_t to)
+ 	loff_t i_size = i_size_read(inode);
+ 
+ 	if (to > i_size) {
++		down_write(&F2FS_I(inode)->i_mmap_sem);
+ 		truncate_pagecache(inode, i_size);
+ 		truncate_blocks(inode, i_size, true);
++		up_write(&F2FS_I(inode)->i_mmap_sem);
+ 	}
+ }
+ 
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+index cd777cf30be2..da70964cbd74 100644
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -519,6 +519,7 @@ struct f2fs_inode_info {
+ 	struct mutex inmem_lock;	/* lock for inmemory pages */
+ 	struct extent_tree *extent_tree;	/* cached extent_tree entry */
+ 	struct rw_semaphore dio_rwsem[2];/* avoid racing between dio and gc */
++	struct rw_semaphore i_mmap_sem;
+ };
+ 
+ static inline void get_extent_info(struct extent_info *ext,
+diff --git a/fs/f2fs/file.c b/fs/f2fs/file.c
+index 65915b4ce14b..ac8b943817e6 100644
+--- a/fs/f2fs/file.c
++++ b/fs/f2fs/file.c
+@@ -33,6 +33,18 @@
+ #include "trace.h"
+ #include <trace/events/f2fs.h>
+ 
++static int f2fs_filemap_fault(struct vm_fault *vmf)
++{
++	struct inode *inode = file_inode(vmf->vma->vm_file);
++	int err;
++
++	down_read(&F2FS_I(inode)->i_mmap_sem);
++	err = filemap_fault(vmf);
++	up_read(&F2FS_I(inode)->i_mmap_sem);
++
++	return err;
++}
++
+ static int f2fs_vm_page_mkwrite(struct vm_fault *vmf)
+ {
+ 	struct page *page = vmf->page;
+@@ -59,13 +71,14 @@ static int f2fs_vm_page_mkwrite(struct vm_fault *vmf)
+ 	f2fs_balance_fs(sbi, dn.node_changed);
+ 
+ 	file_update_time(vmf->vma->vm_file);
++	down_read(&F2FS_I(inode)->i_mmap_sem);
+ 	lock_page(page);
+ 	if (unlikely(page->mapping != inode->i_mapping ||
+ 			page_offset(page) > i_size_read(inode) ||
+ 			!PageUptodate(page))) {
+ 		unlock_page(page);
+ 		err = -EFAULT;
+-		goto out;
++		goto out_sem;
+ 	}
+ 
+ 	/*
+@@ -94,6 +107,8 @@ static int f2fs_vm_page_mkwrite(struct vm_fault *vmf)
+ 	if (f2fs_encrypted_inode(inode) && S_ISREG(inode->i_mode))
+ 		f2fs_wait_on_encrypted_page_writeback(sbi, dn.data_blkaddr);
+ 
++out_sem:
++	up_read(&F2FS_I(inode)->i_mmap_sem);
+ out:
+ 	sb_end_pagefault(inode->i_sb);
+ 	f2fs_update_time(sbi, REQ_TIME);
+@@ -101,7 +116,7 @@ static int f2fs_vm_page_mkwrite(struct vm_fault *vmf)
+ }
+ 
+ static const struct vm_operations_struct f2fs_file_vm_ops = {
+-	.fault		= filemap_fault,
++	.fault		= f2fs_filemap_fault,
+ 	.map_pages	= filemap_map_pages,
+ 	.page_mkwrite	= f2fs_vm_page_mkwrite,
+ };
+@@ -700,8 +715,10 @@ int f2fs_setattr(struct dentry *dentry, struct iattr *attr)
+ 			return -EACCES;
+ 
+ 		if (attr->ia_size <= i_size_read(inode)) {
++			down_write(&F2FS_I(inode)->i_mmap_sem);
+ 			truncate_setsize(inode, attr->ia_size);
+ 			err = f2fs_truncate(inode);
++			up_write(&F2FS_I(inode)->i_mmap_sem);
+ 			if (err)
+ 				return err;
+ 		} else {
+@@ -709,7 +726,9 @@ int f2fs_setattr(struct dentry *dentry, struct iattr *attr)
+ 			 * do not trim all blocks after i_size if target size is
+ 			 * larger than i_size.
+ 			 */
++			down_write(&F2FS_I(inode)->i_mmap_sem);
+ 			truncate_setsize(inode, attr->ia_size);
++			up_write(&F2FS_I(inode)->i_mmap_sem);
+ 
+ 			/* should convert inline inode here */
+ 			if (!f2fs_may_inline_data(inode)) {
+@@ -852,12 +871,14 @@ static int punch_hole(struct inode *inode, loff_t offset, loff_t len)
+ 
+ 			blk_start = (loff_t)pg_start << PAGE_SHIFT;
+ 			blk_end = (loff_t)pg_end << PAGE_SHIFT;
++			down_write(&F2FS_I(inode)->i_mmap_sem);
+ 			truncate_inode_pages_range(mapping, blk_start,
+ 					blk_end - 1);
+ 
+ 			f2fs_lock_op(sbi);
+ 			ret = truncate_hole(inode, pg_start, pg_end);
+ 			f2fs_unlock_op(sbi);
++			up_write(&F2FS_I(inode)->i_mmap_sem);
+ 		}
+ 	}
+ 
+@@ -1096,16 +1117,17 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
+ 	pg_start = offset >> PAGE_SHIFT;
+ 	pg_end = (offset + len) >> PAGE_SHIFT;
+ 
++	down_write(&F2FS_I(inode)->i_mmap_sem);
+ 	/* write out all dirty pages from offset */
+ 	ret = filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	truncate_pagecache(inode, offset);
+ 
+ 	ret = f2fs_do_collapse(inode, pg_start, pg_end);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	/* write out all moved pages, if possible */
+ 	filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
+@@ -1118,6 +1140,8 @@ static int f2fs_collapse_range(struct inode *inode, loff_t offset, loff_t len)
+ 	if (!ret)
+ 		f2fs_i_size_write(inode, new_size);
+ 
++out:
++	up_write(&F2FS_I(inode)->i_mmap_sem);
+ 	return ret;
+ }
+ 
+@@ -1182,9 +1206,10 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
+ 	if (ret)
+ 		return ret;
+ 
++	down_write(&F2FS_I(inode)->i_mmap_sem);
+ 	ret = filemap_write_and_wait_range(mapping, offset, offset + len - 1);
+ 	if (ret)
+-		return ret;
++		goto out_sem;
+ 
+ 	truncate_pagecache_range(inode, offset, offset + len - 1);
+ 
+@@ -1198,7 +1223,7 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
+ 		ret = fill_zero(inode, pg_start, off_start,
+ 						off_end - off_start);
+ 		if (ret)
+-			return ret;
++			goto out_sem;
+ 
+ 		new_size = max_t(loff_t, new_size, offset + len);
+ 	} else {
+@@ -1206,7 +1231,7 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
+ 			ret = fill_zero(inode, pg_start++, off_start,
+ 						PAGE_SIZE - off_start);
+ 			if (ret)
+-				return ret;
++				goto out_sem;
+ 
+ 			new_size = max_t(loff_t, new_size,
+ 					(loff_t)pg_start << PAGE_SHIFT);
+@@ -1255,6 +1280,8 @@ static int f2fs_zero_range(struct inode *inode, loff_t offset, loff_t len,
+ out:
+ 	if (!(mode & FALLOC_FL_KEEP_SIZE) && i_size_read(inode) < new_size)
+ 		f2fs_i_size_write(inode, new_size);
++out_sem:
++	up_write(&F2FS_I(inode)->i_mmap_sem);
+ 
+ 	return ret;
+ }
+@@ -1284,14 +1311,15 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
+ 
+ 	f2fs_balance_fs(sbi, true);
+ 
++	down_write(&F2FS_I(inode)->i_mmap_sem);
+ 	ret = truncate_blocks(inode, i_size_read(inode), true);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	/* write out all dirty pages from offset */
+ 	ret = filemap_write_and_wait_range(inode->i_mapping, offset, LLONG_MAX);
+ 	if (ret)
+-		return ret;
++		goto out;
+ 
+ 	truncate_pagecache(inode, offset);
+ 
+@@ -1320,6 +1348,8 @@ static int f2fs_insert_range(struct inode *inode, loff_t offset, loff_t len)
+ 
+ 	if (!ret)
+ 		f2fs_i_size_write(inode, new_size);
++out:
++	up_write(&F2FS_I(inode)->i_mmap_sem);
+ 	return ret;
+ }
+ 
+diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
+index d6af34d1e6a8..ddd2973ffcbf 100644
+--- a/fs/f2fs/super.c
++++ b/fs/f2fs/super.c
+@@ -624,6 +624,7 @@ static struct inode *f2fs_alloc_inode(struct super_block *sb)
+ 	mutex_init(&fi->inmem_lock);
+ 	init_rwsem(&fi->dio_rwsem[READ]);
+ 	init_rwsem(&fi->dio_rwsem[WRITE]);
++	init_rwsem(&fi->i_mmap_sem);
+ 
+ 	/* Will be used by directory only */
+ 	fi->i_dir_level = F2FS_SB(sb)->dir_level;
+-- 
+2.17.1
+

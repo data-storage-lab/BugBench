@@ -1,0 +1,105 @@
+From 0e3b210ce1722168227cb3bc7746256d0c0afece Mon Sep 17 00:00:00 2001
+From: Boaz Harrosh <boaz@plexistor.com>
+Date: Wed, 15 Apr 2015 16:15:14 -0700
+Subject: [PATCH 482311/911378] dax: use pfn_mkwrite to update c/mtime + freeze
+ protection
+
+From: Yigal Korman <yigal@plexistor.com>
+
+[v1]
+Without this patch, c/mtime is not updated correctly when mmap'ed page is
+first read from and then written to.
+
+A new xfstest is submitted for testing this (generic/080)
+
+[v2]
+Jan Kara has pointed out that if we add the
+sb_start/end_pagefault pair in the new pfn_mkwrite we
+are then fixing another bug where: A user could start
+writing to the page while filesystem is frozen.
+
+Signed-off-by: Yigal Korman <yigal@plexistor.com>
+Signed-off-by: Boaz Harrosh <boaz@plexistor.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Cc: Matthew Wilcox <matthew.r.wilcox@intel.com>
+Cc: Dave Chinner <david@fromorbit.com>
+Cc: Hugh Dickins <hughd@google.com>
+Cc: Mel Gorman <mgorman@suse.de>
+Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+Cc: <stable@vger.kernel.org>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/dax.c           | 17 +++++++++++++++++
+ fs/ext2/file.c     |  1 +
+ fs/ext4/file.c     |  1 +
+ include/linux/fs.h |  1 +
+ 4 files changed, 20 insertions(+)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index ed1619ec6537..d0bd1f4f81b3 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -463,6 +463,23 @@ int dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
+ }
+ EXPORT_SYMBOL_GPL(dax_fault);
+ 
++/**
++ * dax_pfn_mkwrite - handle first write to DAX page
++ * @vma: The virtual memory area where the fault occurred
++ * @vmf: The description of the fault
++ *
++ */
++int dax_pfn_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
++{
++	struct super_block *sb = file_inode(vma->vm_file)->i_sb;
++
++	sb_start_pagefault(sb);
++	file_update_time(vma->vm_file);
++	sb_end_pagefault(sb);
++	return VM_FAULT_NOPAGE;
++}
++EXPORT_SYMBOL_GPL(dax_pfn_mkwrite);
++
+ /**
+  * dax_zero_page_range - zero a range within a page of a DAX file
+  * @inode: The file being truncated
+diff --git a/fs/ext2/file.c b/fs/ext2/file.c
+index e31701713516..866a3ce3f864 100644
+--- a/fs/ext2/file.c
++++ b/fs/ext2/file.c
+@@ -39,6 +39,7 @@ static int ext2_dax_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+ static const struct vm_operations_struct ext2_dax_vm_ops = {
+ 	.fault		= ext2_dax_fault,
+ 	.page_mkwrite	= ext2_dax_mkwrite,
++	.pfn_mkwrite	= dax_pfn_mkwrite,
+ };
+ 
+ static int ext2_file_mmap(struct file *file, struct vm_area_struct *vma)
+diff --git a/fs/ext4/file.c b/fs/ext4/file.c
+index 598abbbe6786..aa78c70553f4 100644
+--- a/fs/ext4/file.c
++++ b/fs/ext4/file.c
+@@ -206,6 +206,7 @@ static int ext4_dax_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+ static const struct vm_operations_struct ext4_dax_vm_ops = {
+ 	.fault		= ext4_dax_fault,
+ 	.page_mkwrite	= ext4_dax_mkwrite,
++	.pfn_mkwrite	= dax_pfn_mkwrite,
+ };
+ #else
+ #define ext4_dax_vm_ops	ext4_file_vm_ops
+diff --git a/include/linux/fs.h b/include/linux/fs.h
+index 60733bdc74b4..0f696328f218 100644
+--- a/include/linux/fs.h
++++ b/include/linux/fs.h
+@@ -2620,6 +2620,7 @@ int dax_clear_blocks(struct inode *, sector_t block, long size);
+ int dax_zero_page_range(struct inode *, loff_t from, unsigned len, get_block_t);
+ int dax_truncate_page(struct inode *, loff_t from, get_block_t);
+ int dax_fault(struct vm_area_struct *, struct vm_fault *, get_block_t);
++int dax_pfn_mkwrite(struct vm_area_struct *, struct vm_fault *);
+ #define dax_mkwrite(vma, vmf, gb)	dax_fault(vma, vmf, gb)
+ 
+ #ifdef CONFIG_BLOCK
+-- 
+2.17.1
+

@@ -1,0 +1,63 @@
+From b36f47617f6ce7c5e8e7c264b9d9ea0654d9f20a Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Tue, 15 Sep 2015 02:42:20 -0400
+Subject: [PATCH 515382/911378] devm_memremap: convert to return ERR_PTR
+
+Make devm_memremap consistent with the error return scheme of
+devm_memremap_pages to remove special casing in the pmem driver.
+
+Cc: Christoph Hellwig <hch@lst.de>
+Cc: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pmem.c | 16 ++++++----------
+ kernel/memremap.c     |  2 +-
+ 2 files changed, 7 insertions(+), 11 deletions(-)
+
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index 0680affae04a..9805d311b1d1 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -150,19 +150,15 @@ static struct pmem_device *pmem_alloc(struct device *dev,
+ 		return ERR_PTR(-EBUSY);
+ 	}
+ 
+-	if (pmem_should_map_pages(dev)) {
+-		void *addr = devm_memremap_pages(dev, res);
+-
+-		if (IS_ERR(addr))
+-			return addr;
+-		pmem->virt_addr = (void __pmem *) addr;
+-	} else {
++	if (pmem_should_map_pages(dev))
++		pmem->virt_addr = (void __pmem *) devm_memremap_pages(dev, res);
++	else
+ 		pmem->virt_addr = (void __pmem *) devm_memremap(dev,
+ 				pmem->phys_addr, pmem->size,
+ 				ARCH_MEMREMAP_PMEM);
+-		if (!pmem->virt_addr)
+-			return ERR_PTR(-ENXIO);
+-	}
++
++	if (IS_ERR(pmem->virt_addr))
++		return (void __force *) pmem->virt_addr;
+ 
+ 	return pmem;
+ }
+diff --git a/kernel/memremap.c b/kernel/memremap.c
+index 0756273437e0..0d818ce04129 100644
+--- a/kernel/memremap.c
++++ b/kernel/memremap.c
+@@ -116,7 +116,7 @@ void *devm_memremap(struct device *dev, resource_size_t offset,
+ 
+ 	ptr = devres_alloc(devm_memremap_release, sizeof(*ptr), GFP_KERNEL);
+ 	if (!ptr)
+-		return NULL;
++		return ERR_PTR(-ENOMEM);
+ 
+ 	addr = memremap(offset, size, flags);
+ 	if (addr) {
+-- 
+2.17.1
+

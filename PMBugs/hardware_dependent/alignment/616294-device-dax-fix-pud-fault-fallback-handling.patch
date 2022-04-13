@@ -1,0 +1,81 @@
+From 70b085b06c4560a69e95607f77bb4c2b2e41943c Mon Sep 17 00:00:00 2001
+From: Dave Jiang <dave.jiang@intel.com>
+Date: Fri, 10 Mar 2017 13:24:27 -0700
+Subject: [PATCH 616294/911378] device-dax: fix pud fault fallback handling
+
+Jeff Moyer reports:
+
+    With a device dax alignment of 4KB or 2MB, I get sigbus when running
+    the attached fio job file for the current kernel (4.11.0-rc1+).  If
+    I specify an alignment of 1GB, it works.
+
+    I turned on debug output, and saw that it was failing in the huge
+    fault code.
+
+     dax dax1.0: dax_open
+     dax dax1.0: dax_mmap
+     dax dax1.0: dax_dev_huge_fault: fio: write (0x7f08f0a00000 -
+     dax dax1.0: __dax_dev_pud_fault: phys_to_pgoff(0xffffffffcf60)
+     dax dax1.0: dax_release
+
+    fio config for reproduce:
+    [global]
+    ioengine=dev-dax
+    direct=0
+    filename=/dev/dax0.0
+    bs=2m
+
+    [write]
+    rw=write
+
+    [read]
+    stonewall
+    rw=read
+
+The driver fails to fallback when taking a fault that is larger than
+the device alignment, or handling a larger fault when a smaller
+mapping is already established. While we could support larger
+mappings for a device with a smaller alignment, that change is
+too large for the immediate fix. The simplest change is to force
+fallback until the fault size matches the alignment.
+
+Reported-by: Jeff Moyer <jmoyer@redhat.com>
+Signed-off-by: Dave Jiang <dave.jiang@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/dax/dax.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/drivers/dax/dax.c b/drivers/dax/dax.c
+index a284dc532e46..523fecec7bda 100644
+--- a/drivers/dax/dax.c
++++ b/drivers/dax/dax.c
+@@ -518,6 +518,8 @@ static int __dax_dev_pud_fault(struct dax_dev *dax_dev, struct vm_fault *vmf)
+ 	phys_addr_t phys;
+ 	pgoff_t pgoff;
+ 	pfn_t pfn;
++	unsigned int fault_size = PUD_SIZE;
++
+ 
+ 	if (check_vma(dax_dev, vmf->vma, __func__))
+ 		return VM_FAULT_SIGBUS;
+@@ -534,6 +536,16 @@ static int __dax_dev_pud_fault(struct dax_dev *dax_dev, struct vm_fault *vmf)
+ 		return VM_FAULT_SIGBUS;
+ 	}
+ 
++	if (fault_size < dax_region->align)
++		return VM_FAULT_SIGBUS;
++	else if (fault_size > dax_region->align)
++		return VM_FAULT_FALLBACK;
++
++	/* if we are outside of the VMA */
++	if (pud_addr < vmf->vma->vm_start ||
++			(pud_addr + PUD_SIZE) > vmf->vma->vm_end)
++		return VM_FAULT_SIGBUS;
++
+ 	pgoff = linear_page_index(vmf->vma, pud_addr);
+ 	phys = pgoff_to_phys(dax_dev, pgoff, PUD_SIZE);
+ 	if (phys == -1) {
+-- 
+2.17.1
+

@@ -1,0 +1,34 @@
+From adcb0ca2330b1d88533e70026ce3f9cc5e2253b6 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Fri, 30 Aug 2019 08:56:55 -0700
+Subject: [PATCH 803032/911378] xfs: fix the dax supported check in
+ xfs_ioctl_setattr_dax_invalidate
+
+Setting the DAX flag on the directory of a file system that is not on a
+DAX capable device makes as little sense as setting it on a regular file
+on the same file system.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Reviewed-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+---
+ fs/xfs/xfs_ioctl.c | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/fs/xfs/xfs_ioctl.c b/fs/xfs/xfs_ioctl.c
+index 495565feae4f..9a6823e29661 100644
+--- a/fs/xfs/xfs_ioctl.c
++++ b/fs/xfs/xfs_ioctl.c
+@@ -1309,8 +1309,7 @@ xfs_ioctl_setattr_dax_invalidate(
+ 	if (fa->fsx_xflags & FS_XFLAG_DAX) {
+ 		if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode)))
+ 			return -EINVAL;
+-		if (S_ISREG(inode->i_mode) &&
+-		    !bdev_dax_supported(xfs_find_bdev_for_inode(VFS_I(ip)),
++		if (!bdev_dax_supported(xfs_find_bdev_for_inode(VFS_I(ip)),
+ 				sb->s_blocksize))
+ 			return -EINVAL;
+ 	}
+-- 
+2.17.1
+

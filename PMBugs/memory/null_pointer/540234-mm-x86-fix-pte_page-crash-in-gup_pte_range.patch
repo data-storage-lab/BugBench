@@ -1,0 +1,48 @@
+From 457a98b0809fa6cde7aab8c314a59d99772b445e Mon Sep 17 00:00:00 2001
+From: Hugh Dickins <hughd@google.com>
+Date: Wed, 17 Feb 2016 13:11:23 -0800
+Subject: [PATCH 540234/911378] mm, x86: fix pte_page() crash in
+ gup_pte_range()
+
+Commit 3565fce3a659 ("mm, x86: get_user_pages() for dax mappings") has
+moved up the pte_page(pte) in x86's fast gup_pte_range(), for no
+discernible reason: put it back where it belongs, after the pte_flags
+check and the pfn_valid cross-check.
+
+That may be the cause of the NULL pointer dereference in
+gup_pte_range(), seen when vfio called vaddr_get_pfn() when starting a
+qemu-kvm based VM.
+
+Signed-off-by: Hugh Dickins <hughd@google.com>
+Reported-by: Michael Long <Harn-Solo@gmx.de>
+Tested-by: Michael Long <Harn-Solo@gmx.de>
+Acked-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ arch/x86/mm/gup.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/mm/gup.c b/arch/x86/mm/gup.c
+index 6d5eb5900372..d8a798d8bf50 100644
+--- a/arch/x86/mm/gup.c
++++ b/arch/x86/mm/gup.c
+@@ -102,7 +102,6 @@ static noinline int gup_pte_range(pmd_t pmd, unsigned long addr,
+ 			return 0;
+ 		}
+ 
+-		page = pte_page(pte);
+ 		if (pte_devmap(pte)) {
+ 			pgmap = get_dev_pagemap(pte_pfn(pte), pgmap);
+ 			if (unlikely(!pgmap)) {
+@@ -115,6 +114,7 @@ static noinline int gup_pte_range(pmd_t pmd, unsigned long addr,
+ 			return 0;
+ 		}
+ 		VM_BUG_ON(!pfn_valid(pte_pfn(pte)));
++		page = pte_page(pte);
+ 		get_page(page);
+ 		put_dev_pagemap(pgmap);
+ 		SetPageReferenced(page);
+-- 
+2.17.1
+

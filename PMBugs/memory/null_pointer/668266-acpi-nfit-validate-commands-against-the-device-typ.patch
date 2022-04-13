@@ -1,0 +1,86 @@
+From 0e7f0741450b1b800b3acfc2319e7f24e8a20fcf Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sun, 12 Nov 2017 14:57:09 -0800
+Subject: [PATCH 668266/911378] acpi, nfit: validate commands against the
+ device type
+
+Fix occasions in acpi_nfit_ctl where we check the command type without
+validating whether we are parsing dimm vs bus level commands. Where the
+command numbers alias between dimms and bus we can make the wrong
+assumption just checking the raw command number. For example, with a
+simple nfit_test mock up of the clear-error command we trigger the
+following:
+
+    BUG: unable to handle kernel NULL pointer dereference at 0000000000000094
+    IP: acpi_nfit_ctl+0x29b/0x930 [nfit]
+    [..]
+    Call Trace:
+     nfit_test_probe+0xb85/0xc09 [nfit_test]
+     platform_drv_probe+0x3b/0xa0
+     ? platform_drv_probe+0x3b/0xa0
+     driver_probe_device+0x29c/0x450
+     ? test_alloc+0x180/0x180 [nfit_test]
+     __driver_attach+0xe3/0xf0
+     ? driver_probe_device+0x450/0x450
+     bus_for_each_dev+0x73/0xc0
+     driver_attach+0x1e/0x20
+     bus_add_driver+0x173/0x270
+     driver_register+0x60/0xe0
+     __platform_driver_register+0x36/0x40
+     nfit_test_init+0x2a1/0x1000 [nfit_test]
+
+Fixes: 4b27db7e26cd ("acpi, nfit: add support for the _LSI, _LSR, and...")
+Reported-by: Vishal Verma <vishal.l.verma@intel.com>
+Tested-by: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/acpi/nfit/core.c | 15 +++++++++------
+ 1 file changed, 9 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/acpi/nfit/core.c b/drivers/acpi/nfit/core.c
+index 8043bfde7c63..ff2580e7611d 100644
+--- a/drivers/acpi/nfit/core.c
++++ b/drivers/acpi/nfit/core.c
+@@ -483,13 +483,14 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
+ 			min_t(u32, 256, in_buf.buffer.length), true);
+ 
+ 	/* call the BIOS, prefer the named methods over _DSM if available */
+-	if (cmd == ND_CMD_GET_CONFIG_SIZE && nfit_mem->has_lsi)
++	if (nvdimm && cmd == ND_CMD_GET_CONFIG_SIZE && nfit_mem->has_lsi)
+ 		out_obj = acpi_label_info(handle);
+-	else if (cmd == ND_CMD_GET_CONFIG_DATA && nfit_mem->has_lsr) {
++	else if (nvdimm && cmd == ND_CMD_GET_CONFIG_DATA && nfit_mem->has_lsr) {
+ 		struct nd_cmd_get_config_data_hdr *p = buf;
+ 
+ 		out_obj = acpi_label_read(handle, p->in_offset, p->in_length);
+-	} else if (cmd == ND_CMD_SET_CONFIG_DATA && nfit_mem->has_lsw) {
++	} else if (nvdimm && cmd == ND_CMD_SET_CONFIG_DATA
++			&& nfit_mem->has_lsw) {
+ 		struct nd_cmd_set_config_hdr *p = buf;
+ 
+ 		out_obj = acpi_label_write(handle, p->in_offset, p->in_length,
+@@ -497,7 +498,7 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
+ 	} else {
+ 		u8 revid;
+ 
+-		if (nfit_mem)
++		if (nvdimm)
+ 			revid = nfit_dsm_revid(nfit_mem->family, func);
+ 		else
+ 			revid = 1;
+@@ -565,8 +566,10 @@ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
+ 	 * Set fw_status for all the commands with a known format to be
+ 	 * later interpreted by xlat_status().
+ 	 */
+-	if (i >= 1 && ((cmd >= ND_CMD_ARS_CAP && cmd <= ND_CMD_CLEAR_ERROR)
+-			|| (cmd >= ND_CMD_SMART && cmd <= ND_CMD_VENDOR)))
++	if (i >= 1 && ((!nvdimm && cmd >= ND_CMD_ARS_CAP
++					&& cmd <= ND_CMD_CLEAR_ERROR)
++				|| (nvdimm && cmd >= ND_CMD_SMART
++					&& cmd <= ND_CMD_VENDOR)))
+ 		fw_status = *(u32 *) out_obj->buffer.pointer;
+ 
+ 	if (offset + in_buf.buffer.length < buf_len) {
+-- 
+2.17.1
+

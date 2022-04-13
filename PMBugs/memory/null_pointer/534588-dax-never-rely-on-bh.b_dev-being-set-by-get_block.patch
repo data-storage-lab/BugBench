@@ -1,0 +1,58 @@
+From eab95db69d334745d3034072f4a7204084136c88 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 22 Jan 2016 15:10:59 -0800
+Subject: [PATCH 534588/911378] dax: never rely on bh.b_dev being set by
+ get_block()
+
+Previously in DAX we assumed that calls to get_block() would set
+bh.b_bdev, and we would then use that value even in error cases for
+debugging.  This caused a NULL pointer dereference in __dax_dbg() which
+was fixed by a previous commit, but that commit only changed the one
+place where we were hitting an error.
+
+Instead, update dax.c so that we always initialize bh.b_bdev as best we
+can based on the information that DAX has.  get_block() may or may not
+update to a new value, but this at least lets us get something helpful
+from bh.b_bdev for error messages and not have to worry about whether it
+was set by get_block() or not.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reported-by: Jan Kara <jack@suse.cz>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/dax.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index d5f6aca5a4d7..206650f82762 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -246,6 +246,7 @@ ssize_t dax_do_io(struct kiocb *iocb, struct inode *inode,
+ 	loff_t end = pos + iov_iter_count(iter);
+ 
+ 	memset(&bh, 0, sizeof(bh));
++	bh.b_bdev = inode->i_sb->s_bdev;
+ 
+ 	if ((flags & DIO_LOCKING) && iov_iter_rw(iter) == READ) {
+ 		struct address_space *mapping = inode->i_mapping;
+@@ -607,6 +608,7 @@ int __dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
+ 
+ 	memset(&bh, 0, sizeof(bh));
+ 	block = (sector_t)vmf->pgoff << (PAGE_SHIFT - blkbits);
++	bh.b_bdev = inode->i_sb->s_bdev;
+ 	bh.b_size = PAGE_SIZE;
+ 
+  repeat:
+@@ -1078,6 +1080,7 @@ int dax_zero_page_range(struct inode *inode, loff_t from, unsigned length,
+ 	BUG_ON((offset + length) > PAGE_CACHE_SIZE);
+ 
+ 	memset(&bh, 0, sizeof(bh));
++	bh.b_bdev = inode->i_sb->s_bdev;
+ 	bh.b_size = PAGE_CACHE_SIZE;
+ 	err = get_block(inode, index, &bh, 0);
+ 	if (err < 0)
+-- 
+2.17.1
+

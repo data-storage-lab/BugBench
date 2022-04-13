@@ -1,0 +1,44 @@
+From 8ca243536d21ae2d08f61b1c5af4ac3d4bb697e4 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Fri, 24 Jul 2015 23:42:34 -0400
+Subject: [PATCH 500505/911378] libnvdimm: fix namespace seed creation
+
+A new BLK namespace "seed" device is created whenever the current seed
+is successfully probed.  However, if that namespace is assigned to a BTT
+it may never directly experience a successful probe as it is a
+subordinate device to a BTT configuration.
+
+The effect of the current code is that no new namespaces can be
+instantiated, after the seed namespace, to consume available BLK DPA
+capacity.  Fix this by treating a successful BTT probe event as a
+successful probe event for the backing namespace.
+
+Reported-by: Nicholas Moulin <nicholas.w.moulin@linux.intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/region_devs.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/drivers/nvdimm/region_devs.c b/drivers/nvdimm/region_devs.c
+index a5233422f9dc..7384455792bf 100644
+--- a/drivers/nvdimm/region_devs.c
++++ b/drivers/nvdimm/region_devs.c
+@@ -458,10 +458,15 @@ static void nd_region_notify_driver_action(struct nvdimm_bus *nvdimm_bus,
+ 		nvdimm_bus_unlock(dev);
+ 	}
+ 	if (is_nd_btt(dev) && probe) {
++		struct nd_btt *nd_btt = to_nd_btt(dev);
++
+ 		nd_region = to_nd_region(dev->parent);
+ 		nvdimm_bus_lock(dev);
+ 		if (nd_region->btt_seed == dev)
+ 			nd_region_create_btt_seed(nd_region);
++		if (nd_region->ns_seed == &nd_btt->ndns->dev &&
++				is_nd_blk(dev->parent))
++			nd_region_create_blk_seed(nd_region);
+ 		nvdimm_bus_unlock(dev);
+ 	}
+ }
+-- 
+2.17.1
+

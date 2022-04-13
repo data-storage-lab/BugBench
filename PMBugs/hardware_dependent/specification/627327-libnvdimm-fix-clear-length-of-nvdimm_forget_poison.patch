@@ -1,0 +1,41 @@
+From 8d13c0290655b883df9083a2a0af0d782bc38aef Mon Sep 17 00:00:00 2001
+From: Toshi Kani <toshi.kani@hpe.com>
+Date: Thu, 27 Apr 2017 16:57:05 -0600
+Subject: [PATCH 627327/911378] libnvdimm: fix clear length of
+ nvdimm_forget_poison()
+
+ND_CMD_CLEAR_ERROR command returns 'clear_err.cleared', the length
+of error actually cleared, which may be smaller than its requested
+'len'.
+
+Change nvdimm_clear_poison() to call nvdimm_forget_poison() with
+'clear_err.cleared' when this value is valid.
+
+Cc: <stable@vger.kernel.org>
+Fixes: e046114af5fc ("libnvdimm: clear the internal poison_list when clearing badblocks")
+Cc: Dave Jiang <dave.jiang@intel.com>
+Cc: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Toshi Kani <toshi.kani@hpe.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/bus.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/bus.c b/drivers/nvdimm/bus.c
+index d214ac44d111..43ddfd487c85 100644
+--- a/drivers/nvdimm/bus.c
++++ b/drivers/nvdimm/bus.c
+@@ -219,7 +219,9 @@ long nvdimm_clear_poison(struct device *dev, phys_addr_t phys,
+ 	if (cmd_rc < 0)
+ 		return cmd_rc;
+ 
+-	nvdimm_forget_poison(nvdimm_bus, phys, len);
++	if (clear_err.cleared > 0)
++		nvdimm_forget_poison(nvdimm_bus, phys, clear_err.cleared);
++
+ 	return clear_err.cleared;
+ }
+ EXPORT_SYMBOL_GPL(nvdimm_clear_poison);
+-- 
+2.17.1
+

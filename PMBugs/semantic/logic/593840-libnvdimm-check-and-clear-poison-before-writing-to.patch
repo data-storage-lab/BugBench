@@ -1,0 +1,76 @@
+From 82bf1037f2cab2d6960a08ae08513f2c3c0b335a Mon Sep 17 00:00:00 2001
+From: Dave Jiang <dave.jiang@intel.com>
+Date: Fri, 11 Nov 2016 12:37:36 -0700
+Subject: [PATCH 593840/911378] libnvdimm: check and clear poison before
+ writing to pmem
+
+We need to clear any poison when we are writing to pmem. The granularity
+will be sector size. If it's less then we can't do anything about it
+barring corruption.
+
+Signed-off-by: Dave Jiang <dave.jiang@intel.com>
+Reviewed-by: Vishal Verma <vishal.l.verma@intel.com>
+[djbw: fixup 0-length write request to succeed]
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/claim.c | 30 ++++++++++++++++++++++++++----
+ 1 file changed, 26 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/nvdimm/claim.c b/drivers/nvdimm/claim.c
+index d5dc80c48b4c..8d66fbb779ed 100644
+--- a/drivers/nvdimm/claim.c
++++ b/drivers/nvdimm/claim.c
+@@ -226,6 +226,12 @@ static int nsio_rw_bytes(struct nd_namespace_common *ndns,
+ 		resource_size_t offset, void *buf, size_t size, int rw)
+ {
+ 	struct nd_namespace_io *nsio = to_nd_namespace_io(&ndns->dev);
++	unsigned int sz_align = ALIGN(size + (offset & (512 - 1)), 512);
++	sector_t sector = offset >> 9;
++	int rc = 0;
++
++	if (unlikely(!size))
++		return 0;
+ 
+ 	if (unlikely(offset + size > nsio->size)) {
+ 		dev_WARN_ONCE(&ndns->dev, 1, "request out of range\n");
+@@ -233,17 +239,33 @@ static int nsio_rw_bytes(struct nd_namespace_common *ndns,
+ 	}
+ 
+ 	if (rw == READ) {
+-		unsigned int sz_align = ALIGN(size + (offset & (512 - 1)), 512);
+-
+-		if (unlikely(is_bad_pmem(&nsio->bb, offset / 512, sz_align)))
++		if (unlikely(is_bad_pmem(&nsio->bb, sector, sz_align)))
+ 			return -EIO;
+ 		return memcpy_from_pmem(buf, nsio->addr + offset, size);
+ 	} else {
++
++		if (unlikely(is_bad_pmem(&nsio->bb, sector, sz_align))) {
++			if (IS_ALIGNED(offset, 512) && IS_ALIGNED(size, 512)) {
++				long cleared;
++
++				cleared = nvdimm_clear_poison(&ndns->dev,
++							      offset, size);
++				if (cleared != size) {
++					size = cleared;
++					rc = -EIO;
++				}
++
++				badblocks_clear(&nsio->bb, sector,
++						cleared >> 9);
++			} else
++				rc = -EIO;
++		}
++
+ 		memcpy_to_pmem(nsio->addr + offset, buf, size);
+ 		nvdimm_flush(to_nd_region(ndns->dev.parent));
+ 	}
+ 
+-	return 0;
++	return rc;
+ }
+ 
+ int devm_nsio_enable(struct device *dev, struct nd_namespace_io *nsio)
+-- 
+2.17.1
+

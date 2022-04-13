@@ -1,0 +1,185 @@
+From a390180291dd9a2392bbab4242cde712c326efc6 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Thu, 7 Apr 2016 20:02:06 -0700
+Subject: [PATCH 550941/911378] libnvdimm, pfn: fix
+ nvdimm_namespace_add_poison() vs section alignment
+
+When section alignment padding is in effect we need to shift / truncate
+the range that is queried for poison by the 'start_pad' or 'end_trunc'
+reservations.
+
+It's easiest if we just pass in an adjusted resource range rather than
+deriving it from the passed in namespace.  With the resource range
+resolution pushed out to the caller we can also push the
+namespace-to-region lookup to the caller and drop the implicit pmem-type
+assumption about the passed in namespace object.
+
+Cc: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/core.c | 41 ++++++++++++++++++++---------------------
+ drivers/nvdimm/nd.h   |  4 ++--
+ drivers/nvdimm/pmem.c | 36 +++++++++++++++++++++++++++++-------
+ 3 files changed, 51 insertions(+), 30 deletions(-)
+
+diff --git a/drivers/nvdimm/core.c b/drivers/nvdimm/core.c
+index 79646d0c3277..182a93fe3712 100644
+--- a/drivers/nvdimm/core.c
++++ b/drivers/nvdimm/core.c
+@@ -417,8 +417,8 @@ static void __add_badblock_range(struct badblocks *bb, u64 ns_offset, u64 len)
+ 		set_badblock(bb, start_sector, num_sectors);
+ }
+ 
+-static void namespace_add_poison(struct list_head *poison_list,
+-		struct badblocks *bb, struct resource *res)
++static void badblocks_populate(struct list_head *poison_list,
++		struct badblocks *bb, const struct resource *res)
+ {
+ 	struct nd_poison *pl;
+ 
+@@ -460,36 +460,35 @@ static void namespace_add_poison(struct list_head *poison_list,
+ }
+ 
+ /**
+- * nvdimm_namespace_add_poison() - Convert a list of poison ranges to badblocks
+- * @ndns:	the namespace containing poison ranges
+- * @bb:		badblocks instance to populate
+- * @offset:	offset at the start of the namespace before 'sector 0'
++ * nvdimm_badblocks_populate() - Convert a list of poison ranges to badblocks
++ * @region: parent region of the range to interrogate
++ * @bb: badblocks instance to populate
++ * @res: resource range to consider
+  *
+- * The poison list generated during NFIT initialization may contain multiple,
+- * possibly overlapping ranges in the SPA (System Physical Address) space.
+- * Compare each of these ranges to the namespace currently being initialized,
+- * and add badblocks to the gendisk for all matching sub-ranges
++ * The poison list generated during bus initialization may contain
++ * multiple, possibly overlapping physical address ranges.  Compare each
++ * of these ranges to the resource range currently being initialized,
++ * and add badblocks entries for all matching sub-ranges
+  */
+-void nvdimm_namespace_add_poison(struct nd_namespace_common *ndns,
+-		struct badblocks *bb, resource_size_t offset)
++void nvdimm_badblocks_populate(struct nd_region *nd_region,
++		struct badblocks *bb, const struct resource *res)
+ {
+-	struct nd_namespace_io *nsio = to_nd_namespace_io(&ndns->dev);
+-	struct nd_region *nd_region = to_nd_region(ndns->dev.parent);
+ 	struct nvdimm_bus *nvdimm_bus;
+ 	struct list_head *poison_list;
+-	struct resource res = {
+-		.start = nsio->res.start + offset,
+-		.end = nsio->res.end,
+-	};
+ 
+-	nvdimm_bus = to_nvdimm_bus(nd_region->dev.parent);
++	if (!is_nd_pmem(&nd_region->dev)) {
++		dev_WARN_ONCE(&nd_region->dev, 1,
++				"%s only valid for pmem regions\n", __func__);
++		return;
++	}
++	nvdimm_bus = walk_to_nvdimm_bus(&nd_region->dev);
+ 	poison_list = &nvdimm_bus->poison_list;
+ 
+ 	nvdimm_bus_lock(&nvdimm_bus->dev);
+-	namespace_add_poison(poison_list, bb, &res);
++	badblocks_populate(poison_list, bb, res);
+ 	nvdimm_bus_unlock(&nvdimm_bus->dev);
+ }
+-EXPORT_SYMBOL_GPL(nvdimm_namespace_add_poison);
++EXPORT_SYMBOL_GPL(nvdimm_badblocks_populate);
+ 
+ static int add_poison(struct nvdimm_bus *nvdimm_bus, u64 addr, u64 length)
+ {
+diff --git a/drivers/nvdimm/nd.h b/drivers/nvdimm/nd.h
+index 1799bd97a9ce..875c524fafb0 100644
+--- a/drivers/nvdimm/nd.h
++++ b/drivers/nvdimm/nd.h
+@@ -266,8 +266,8 @@ int nvdimm_namespace_attach_btt(struct nd_namespace_common *ndns);
+ int nvdimm_namespace_detach_btt(struct nd_namespace_common *ndns);
+ const char *nvdimm_namespace_disk_name(struct nd_namespace_common *ndns,
+ 		char *name);
+-void nvdimm_namespace_add_poison(struct nd_namespace_common *ndns,
+-		struct badblocks *bb, resource_size_t offset);
++void nvdimm_badblocks_populate(struct nd_region *nd_region,
++		struct badblocks *bb, const struct resource *res);
+ int nd_blk_region_init(struct nd_region *nd_region);
+ void __nd_iostat_start(struct bio *bio, unsigned long *start);
+ static inline bool nd_iostat_start(struct bio *bio, unsigned long *start)
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index cc31c6f1f88e..ca304342af33 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -244,7 +244,9 @@ static void pmem_detach_disk(struct pmem_device *pmem)
+ static int pmem_attach_disk(struct device *dev,
+ 		struct nd_namespace_common *ndns, struct pmem_device *pmem)
+ {
++	struct nd_namespace_io *nsio = to_nd_namespace_io(&ndns->dev);
+ 	int nid = dev_to_node(dev);
++	struct resource bb_res;
+ 	struct gendisk *disk;
+ 
+ 	blk_queue_make_request(pmem->pmem_queue, pmem_make_request);
+@@ -271,8 +273,17 @@ static int pmem_attach_disk(struct device *dev,
+ 	devm_exit_badblocks(dev, &pmem->bb);
+ 	if (devm_init_badblocks(dev, &pmem->bb))
+ 		return -ENOMEM;
+-	nvdimm_namespace_add_poison(ndns, &pmem->bb, pmem->data_offset);
+-
++	bb_res.start = nsio->res.start + pmem->data_offset;
++	bb_res.end = nsio->res.end;
++	if (is_nd_pfn(dev)) {
++		struct nd_pfn *nd_pfn = to_nd_pfn(dev);
++		struct nd_pfn_sb *pfn_sb = nd_pfn->pfn_sb;
++
++		bb_res.start += __le32_to_cpu(pfn_sb->start_pad);
++		bb_res.end -= __le32_to_cpu(pfn_sb->end_trunc);
++	}
++	nvdimm_badblocks_populate(to_nd_region(dev->parent), &pmem->bb,
++			&bb_res);
+ 	disk->bb = &pmem->bb;
+ 	add_disk(disk);
+ 	revalidate_disk(disk);
+@@ -553,7 +564,7 @@ static int nd_pmem_probe(struct device *dev)
+ 	ndns->rw_bytes = pmem_rw_bytes;
+ 	if (devm_init_badblocks(dev, &pmem->bb))
+ 		return -ENOMEM;
+-	nvdimm_namespace_add_poison(ndns, &pmem->bb, 0);
++	nvdimm_badblocks_populate(nd_region, &pmem->bb, &nsio->res);
+ 
+ 	if (is_nd_btt(dev)) {
+ 		/* btt allocates its own request_queue */
+@@ -595,14 +606,25 @@ static void nd_pmem_notify(struct device *dev, enum nvdimm_event event)
+ {
+ 	struct pmem_device *pmem = dev_get_drvdata(dev);
+ 	struct nd_namespace_common *ndns = pmem->ndns;
++	struct nd_region *nd_region = to_nd_region(dev->parent);
++	struct nd_namespace_io *nsio = to_nd_namespace_io(&ndns->dev);
++	struct resource res = {
++		.start = nsio->res.start + pmem->data_offset,
++		.end = nsio->res.end,
++	};
+ 
+ 	if (event != NVDIMM_REVALIDATE_POISON)
+ 		return;
+ 
+-	if (is_nd_btt(dev))
+-		nvdimm_namespace_add_poison(ndns, &pmem->bb, 0);
+-	else
+-		nvdimm_namespace_add_poison(ndns, &pmem->bb, pmem->data_offset);
++	if (is_nd_pfn(dev)) {
++		struct nd_pfn *nd_pfn = to_nd_pfn(dev);
++		struct nd_pfn_sb *pfn_sb = nd_pfn->pfn_sb;
++
++		res.start += __le32_to_cpu(pfn_sb->start_pad);
++		res.end -= __le32_to_cpu(pfn_sb->end_trunc);
++	}
++
++	nvdimm_badblocks_populate(nd_region, &pmem->bb, &res);
+ }
+ 
+ MODULE_ALIAS("pmem");
+-- 
+2.17.1
+

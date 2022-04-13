@@ -1,0 +1,47 @@
+From 73f34a5e2ceddfca27c999c170620e6354aaf6d7 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 26 Feb 2016 15:19:49 -0800
+Subject: [PATCH 542743/911378] ext4: online defrag not supported with DAX
+
+Online defrag operations for ext4 are hard coded to use the page cache.
+See ext4_ioctl() -> ext4_move_extents() -> move_extent_per_page()
+
+When combined with DAX I/O, which circumvents the page cache, this can
+result in data corruption.  This was observed with xfstests ext4/307 and
+ext4/308.
+
+Fix this by only allowing online defrag for non-DAX files.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Cc: Theodore Ts'o <tytso@mit.edu>
+Cc: Al Viro <viro@ftp.linux.org.uk>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Dave Chinner <david@fromorbit.com>
+Cc: Jens Axboe <axboe@fb.com>
+Cc: Matthew Wilcox <matthew.r.wilcox@intel.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/ext4/ioctl.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/fs/ext4/ioctl.c b/fs/ext4/ioctl.c
+index a99b010e2194..eae5917c534e 100644
+--- a/fs/ext4/ioctl.c
++++ b/fs/ext4/ioctl.c
+@@ -583,6 +583,11 @@ long ext4_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+ 				 "Online defrag not supported with bigalloc");
+ 			err = -EOPNOTSUPP;
+ 			goto mext_out;
++		} else if (IS_DAX(inode)) {
++			ext4_msg(sb, KERN_ERR,
++				 "Online defrag not supported with DAX");
++			err = -EOPNOTSUPP;
++			goto mext_out;
+ 		}
+ 
+ 		err = mnt_want_write_file(filp);
+-- 
+2.17.1
+

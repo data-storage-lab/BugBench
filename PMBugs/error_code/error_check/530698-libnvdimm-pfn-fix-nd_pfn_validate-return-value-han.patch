@@ -1,0 +1,32 @@
+From 3fa962686568a1617d174e3d2f5d522e963077c5 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sun, 13 Dec 2015 11:35:52 -0800
+Subject: [PATCH 530698/911378] libnvdimm, pfn: fix nd_pfn_validate() return
+ value handling
+
+The -ENODEV case indicates that the info-block needs to established.
+All other return codes cause nd_pfn_init() to abort.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pmem.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index dc6866734f70..ab689bca727d 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -238,7 +238,9 @@ static int nd_pfn_init(struct nd_pfn *nd_pfn)
+ 
+ 	nd_pfn->pfn_sb = pfn_sb;
+ 	rc = nd_pfn_validate(nd_pfn);
+-	if (rc == 0 || rc == -EBUSY)
++	if (rc == -ENODEV)
++		/* no info block, do init */;
++	else
+ 		return rc;
+ 
+ 	nd_region = to_nd_region(nd_pfn->dev.parent);
+-- 
+2.17.1
+

@@ -1,0 +1,38 @@
+From 4be9c1fc3df9c3b03c9bde8aec5e44fc73996a3f Mon Sep 17 00:00:00 2001
+From: Axel Lin <axel.lin@ingics.com>
+Date: Wed, 16 Sep 2015 21:24:47 +0800
+Subject: [PATCH 510462/911378] libnvdimm: btt_devs: Fix locking in
+ namespace_store
+
+Always take device_lock() before nvdimm_bus_lock() to prevent deadlock.
+
+Cc: <stable@vger.kernel.org>
+Signed-off-by: Axel Lin <axel.lin@ingics.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/btt_devs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/btt_devs.c b/drivers/nvdimm/btt_devs.c
+index 59ad54a63d9f..cb477518dd0e 100644
+--- a/drivers/nvdimm/btt_devs.c
++++ b/drivers/nvdimm/btt_devs.c
+@@ -128,13 +128,13 @@ static ssize_t namespace_store(struct device *dev,
+ 	struct nd_btt *nd_btt = to_nd_btt(dev);
+ 	ssize_t rc;
+ 
+-	nvdimm_bus_lock(dev);
+ 	device_lock(dev);
++	nvdimm_bus_lock(dev);
+ 	rc = nd_namespace_store(dev, &nd_btt->ndns, buf, len);
+ 	dev_dbg(dev, "%s: result: %zd wrote: %s%s", __func__,
+ 			rc, buf, buf[len - 1] == '\n' ? "" : "\n");
+-	device_unlock(dev);
+ 	nvdimm_bus_unlock(dev);
++	device_unlock(dev);
+ 
+ 	return rc;
+ }
+-- 
+2.17.1
+

@@ -1,0 +1,43 @@
+From d4bbe7068b60e9263f08c54e6c2a0166c0f37317 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 22 Jan 2016 15:10:31 -0800
+Subject: [PATCH 534579/911378] dax: fix NULL pointer dereference in
+ __dax_dbg()
+
+In __dax_pmd_fault() we currently assume that get_block() will always
+set bh.b_bdev and we unconditionally dereference it in __dax_dbg().
+
+This assumption isn't always true - when called for reads of holes
+ext4_dax_mmap_get_block() returns a buffer head where bh->b_bdev is
+never set.  I hit this BUG while testing the DAX PMD fault path.
+
+Instead, initialize bh.b_bdev before passing bh into get_block().  It is
+possible that the filesystem's get_block() will update bh.b_bdev, and
+this is fine - we just want to initialize bh.b_bdev to something
+reasonable so that the calls to __dax_dbg() work and print something
+useful.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reported-by: Dan Williams <dan.j.williams@intel.com>
+Cc: Jan Kara <jack@suse.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/dax.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 7af879759064..513bba5f1e02 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -624,6 +624,7 @@ int __dax_pmd_fault(struct vm_area_struct *vma, unsigned long address,
+ 	}
+ 
+ 	memset(&bh, 0, sizeof(bh));
++	bh.b_bdev = inode->i_sb->s_bdev;
+ 	block = (sector_t)pgoff << (PAGE_SHIFT - blkbits);
+ 
+ 	bh.b_size = PMD_SIZE;
+-- 
+2.17.1
+

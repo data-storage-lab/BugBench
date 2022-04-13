@@ -1,0 +1,46 @@
+From ecfb6d8a041cc2ca80bc69ffc20c00067d190df5 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Wed, 21 Sep 2016 09:22:33 -0700
+Subject: [PATCH 584345/911378] libnvdimm: fix devm_nvdimm_memremap() error
+ path
+
+The internal alloc_nvdimm_map() helper might fail, particularly if the
+memory region is already busy.  Report request_mem_region() failures and
+check for the failure.
+
+Reported-by: Ryan Chen <ryan.chan105@gmail.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/core.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/core.c b/drivers/nvdimm/core.c
+index 715583f69d28..4d7bbd2df5c0 100644
+--- a/drivers/nvdimm/core.c
++++ b/drivers/nvdimm/core.c
+@@ -99,8 +99,11 @@ static struct nvdimm_map *alloc_nvdimm_map(struct device *dev,
+ 	nvdimm_map->size = size;
+ 	kref_init(&nvdimm_map->kref);
+ 
+-	if (!request_mem_region(offset, size, dev_name(&nvdimm_bus->dev)))
++	if (!request_mem_region(offset, size, dev_name(&nvdimm_bus->dev))) {
++		dev_err(&nvdimm_bus->dev, "failed to request %pa + %zd for %s\n",
++				&offset, size, dev_name(dev));
+ 		goto err_request_region;
++	}
+ 
+ 	if (flags)
+ 		nvdimm_map->mem = memremap(offset, size, flags);
+@@ -171,6 +174,9 @@ void *devm_nvdimm_memremap(struct device *dev, resource_size_t offset,
+ 		kref_get(&nvdimm_map->kref);
+ 	nvdimm_bus_unlock(dev);
+ 
++	if (!nvdimm_map)
++		return NULL;
++
+ 	if (devm_add_action_or_reset(dev, nvdimm_map_put, nvdimm_map))
+ 		return NULL;
+ 
+-- 
+2.17.1
+

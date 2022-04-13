@@ -1,0 +1,90 @@
+From 02881768695da29772f6f9e0d857a8637c6b0e90 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Tue, 29 Aug 2017 18:28:18 -0700
+Subject: [PATCH 652720/911378] libnvdimm, label: fix index block size
+ calculation
+
+The old calculation assumed that the label space was 128k and the label
+size is 128. With v1.2 labels where the label size is 256 this
+calculation will return zero. We are saved by the fact that the
+nsindex_size is always pre-initialized from a previous 128 byte
+assumption and we are lucky that the index sizes turn out the same.
+
+Fix this going forward in case we start encountering different
+geometries of label areas besides 128k.
+
+Since the label size can change from one call to the next, drop the
+caching of nsindex_size.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/label.c | 30 ++++++++++++++++--------------
+ drivers/nvdimm/nd.h    |  2 +-
+ 2 files changed, 17 insertions(+), 15 deletions(-)
+
+diff --git a/drivers/nvdimm/label.c b/drivers/nvdimm/label.c
+index 87796f840777..9c5f108910e3 100644
+--- a/drivers/nvdimm/label.c
++++ b/drivers/nvdimm/label.c
+@@ -45,12 +45,14 @@ unsigned sizeof_namespace_label(struct nvdimm_drvdata *ndd)
+ 	return ndd->nslabel_size;
+ }
+ 
+-size_t sizeof_namespace_index(struct nvdimm_drvdata *ndd)
++int nvdimm_num_label_slots(struct nvdimm_drvdata *ndd)
+ {
+-	u32 index_span;
++	return ndd->nsarea.config_size / (sizeof_namespace_label(ndd) + 1);
++}
+ 
+-	if (ndd->nsindex_size)
+-		return ndd->nsindex_size;
++size_t sizeof_namespace_index(struct nvdimm_drvdata *ndd)
++{
++	u32 nslot, space, size;
+ 
+ 	/*
+ 	 * The minimum index space is 512 bytes, with that amount of
+@@ -60,16 +62,16 @@ size_t sizeof_namespace_index(struct nvdimm_drvdata *ndd)
+ 	 * starts to waste space at larger config_sizes, but it's
+ 	 * unlikely we'll ever see anything but 128K.
+ 	 */
+-	index_span = ndd->nsarea.config_size / (sizeof_namespace_label(ndd) + 1);
+-	index_span /= NSINDEX_ALIGN * 2;
+-	ndd->nsindex_size = index_span * NSINDEX_ALIGN;
+-
+-	return ndd->nsindex_size;
+-}
+-
+-int nvdimm_num_label_slots(struct nvdimm_drvdata *ndd)
+-{
+-	return ndd->nsarea.config_size / (sizeof_namespace_label(ndd) + 1);
++	nslot = nvdimm_num_label_slots(ndd);
++	space = ndd->nsarea.config_size - nslot * sizeof_namespace_label(ndd);
++	size = ALIGN(sizeof(struct nd_namespace_index) + DIV_ROUND_UP(nslot, 8),
++			NSINDEX_ALIGN) * 2;
++	if (size <= space)
++		return size / 2;
++
++	dev_err(ndd->dev, "label area (%d) too small to host (%d byte) labels\n",
++			ndd->nsarea.config_size, sizeof_namespace_label(ndd));
++	return 0;
+ }
+ 
+ static int __nd_label_validate(struct nvdimm_drvdata *ndd)
+diff --git a/drivers/nvdimm/nd.h b/drivers/nvdimm/nd.h
+index 251c7e6d2588..023fc93e21a5 100644
+--- a/drivers/nvdimm/nd.h
++++ b/drivers/nvdimm/nd.h
+@@ -42,7 +42,7 @@ struct nd_poison {
+ 
+ struct nvdimm_drvdata {
+ 	struct device *dev;
+-	int nsindex_size, nslabel_size;
++	int nslabel_size;
+ 	struct nd_cmd_get_config_size nsarea;
+ 	void *data;
+ 	int ns_current, ns_next;
+-- 
+2.17.1
+

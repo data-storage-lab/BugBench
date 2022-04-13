@@ -1,0 +1,34 @@
+From 480b6837aa579991c6acc113bccf838e6a90843c Mon Sep 17 00:00:00 2001
+From: Oliver O'Halloran <oohall@gmail.com>
+Date: Mon, 19 Sep 2016 20:19:00 +1000
+Subject: [PATCH 583566/911378] nvdimm: fix PHYS_PFN/PFN_PHYS mixup
+
+nd_activate_region() iomaps any hint addresses required when activating
+a region. To prevent duplicate mappings it checks the PFN of the hint to
+be mapped against the PFNs of the already mapped hints. Unfortunately it
+doesn't convert the PFN back into a physical address before passing it
+to devm_nvdimm_ioremap(). Instead it applies PHYS_PFN a second time
+which ends about as well as you would imagine.
+
+Signed-off-by: Oliver O'Halloran <oohall@gmail.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/region_devs.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/region_devs.c b/drivers/nvdimm/region_devs.c
+index e8d5ba7b29af..4eef88eb5144 100644
+--- a/drivers/nvdimm/region_devs.c
++++ b/drivers/nvdimm/region_devs.c
+@@ -57,7 +57,7 @@ static int nvdimm_map_flush(struct device *dev, struct nvdimm *nvdimm, int dimm,
+ 					ndrd->flush_wpq[dimm][j] & PAGE_MASK);
+ 		else
+ 			flush_page = devm_nvdimm_ioremap(dev,
+-					PHYS_PFN(pfn), PAGE_SIZE);
++					PFN_PHYS(pfn), PAGE_SIZE);
+ 		if (!flush_page)
+ 			return -ENXIO;
+ 		ndrd->flush_wpq[dimm][i] = flush_page
+-- 
+2.17.1
+

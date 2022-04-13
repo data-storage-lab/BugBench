@@ -1,0 +1,43 @@
+From ee190ca6516bc8257e3d36187ca6f0f71a9ec477 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Jan=20H=2E=20Sch=C3=B6nherr?= <jschoenh@amazon.de>
+Date: Wed, 31 Jan 2018 16:14:04 -0800
+Subject: [PATCH 682622/911378] fs/dax.c: release PMD lock even when there is
+ no PMD support in DAX
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+follow_pte_pmd() can theoretically return after having acquired a PMD
+lock, even when DAX was not compiled with CONFIG_FS_DAX_PMD.
+
+Release the PMD lock unconditionally.
+
+Link: http://lkml.kernel.org/r/20180118133839.20587-1-jschoenh@amazon.de
+Fixes: f729c8c9b24f ("dax: wrprotect pmd_t in dax_mapping_entry_mkclean")
+Signed-off-by: Jan H. Schönherr <jschoenh@amazon.de>
+Reviewed-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reviewed-by: Andrew Morton <akpm@linux-foundation.org>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/dax.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 95981591977a..c2ebf10b70da 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -636,8 +636,8 @@ static void dax_mapping_entry_mkclean(struct address_space *mapping,
+ 			pmd = pmd_mkclean(pmd);
+ 			set_pmd_at(vma->vm_mm, address, pmdp, pmd);
+ unlock_pmd:
+-			spin_unlock(ptl);
+ #endif
++			spin_unlock(ptl);
+ 		} else {
+ 			if (pfn != pte_pfn(*ptep))
+ 				goto unlock_pte;
+-- 
+2.17.1
+

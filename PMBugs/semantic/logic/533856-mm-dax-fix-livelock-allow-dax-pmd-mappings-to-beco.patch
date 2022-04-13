@@ -1,0 +1,56 @@
+From 01871e59af5cc1cbf290ad6b4b95cd2f0cec9e8c Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 15 Jan 2016 16:56:02 -0800
+Subject: [PATCH 533856/911378] mm, dax: fix livelock, allow dax pmd mappings
+ to become writeable
+
+Prior to this change DAX PMD mappings that were made read-only were
+never able to be made writable again.  This is because the code in
+insert_pfn_pmd() that calls pmd_mkdirty() and pmd_mkwrite() would skip
+these calls if the PMD already existed in the page table.
+
+Instead, if we are doing a write always mark the PMD entry as dirty and
+writeable.  Without this code we can get into a condition where we mark
+the PMD as read-only, and then on a subsequent write fault we get into
+an infinite loop of PMD faults where we try unsuccessfully to make the
+PMD writeable.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+Reported-by: Jeff Moyer <jmoyer@redhat.com>
+Reported-by: Toshi Kani <toshi.kani@hpe.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ mm/huge_memory.c | 14 ++++++--------
+ 1 file changed, 6 insertions(+), 8 deletions(-)
+
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 9d12d63a0ddd..996e86dbeb43 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -938,15 +938,13 @@ static void insert_pfn_pmd(struct vm_area_struct *vma, unsigned long addr,
+ 	spinlock_t *ptl;
+ 
+ 	ptl = pmd_lock(mm, pmd);
+-	if (pmd_none(*pmd)) {
+-		entry = pmd_mkhuge(pfn_pmd(pfn, prot));
+-		if (write) {
+-			entry = pmd_mkyoung(pmd_mkdirty(entry));
+-			entry = maybe_pmd_mkwrite(entry, vma);
+-		}
+-		set_pmd_at(mm, addr, pmd, entry);
+-		update_mmu_cache_pmd(vma, addr, pmd);
++	entry = pmd_mkhuge(pfn_pmd(pfn, prot));
++	if (write) {
++		entry = pmd_mkyoung(pmd_mkdirty(entry));
++		entry = maybe_pmd_mkwrite(entry, vma);
+ 	}
++	set_pmd_at(mm, addr, pmd, entry);
++	update_mmu_cache_pmd(vma, addr, pmd);
+ 	spin_unlock(ptl);
+ }
+ 
+-- 
+2.17.1
+

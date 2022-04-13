@@ -1,0 +1,47 @@
+From bc0d0d093b379b0b379c429e3348498287c8a9ca Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Mon, 30 Nov 2015 09:10:33 -0800
+Subject: [PATCH 525311/911378] libnvdimm, e820: skip module loading when no
+ type-12
+
+If there are no persistent memory ranges present then don't bother
+creating the platform device.  Otherwise, it loads the full libnvdimm
+sub-system only to discover no resources present.
+
+Reported-by: Andy Lutomirski <luto@amacapital.net>
+Acked-by: Andy Lutomirski <luto@amacapital.net>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ arch/x86/kernel/pmem.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/arch/x86/kernel/pmem.c b/arch/x86/kernel/pmem.c
+index 4f00b63d7ff3..14415aff1813 100644
+--- a/arch/x86/kernel/pmem.c
++++ b/arch/x86/kernel/pmem.c
+@@ -4,10 +4,22 @@
+  */
+ #include <linux/platform_device.h>
+ #include <linux/module.h>
++#include <linux/ioport.h>
++
++static int found(u64 start, u64 end, void *data)
++{
++	return 1;
++}
+ 
+ static __init int register_e820_pmem(void)
+ {
++	char *pmem = "Persistent Memory (legacy)";
+ 	struct platform_device *pdev;
++	int rc;
++
++	rc = walk_iomem_res(pmem, IORESOURCE_MEM, 0, -1, NULL, found);
++	if (rc <= 0)
++		return 0;
+ 
+ 	/*
+ 	 * See drivers/nvdimm/e820.c for the implementation, this is
+-- 
+2.17.1
+

@@ -1,0 +1,66 @@
+From 0df9d41ab5d43dc5b20abc8b22a6b6d098b03994 Mon Sep 17 00:00:00 2001
+From: Yigal Korman <yigal@plexistor.com>
+Date: Mon, 16 Nov 2015 14:09:15 +0200
+Subject: [PATCH 523665/911378] mm, dax: fix DAX deadlocks (COW fault)
+
+DAX handling of COW faults has wrong locking sequence:
+	dax_fault does i_mmap_lock_read
+	do_cow_fault does i_mmap_unlock_write
+
+Ross's commit[1] missed a fix[2] that Kirill added to Matthew's
+commit[3].
+
+Original COW locking logic was introduced by Matthew here[4].
+
+This should be applied to v4.3 as well.
+
+[1] 0f90cc6609c7 mm, dax: fix DAX deadlocks
+[2] 52a2b53ffde6 mm, dax: use i_mmap_unlock_write() in do_cow_fault()
+[3] 843172978bb9 dax: fix race between simultaneous faults
+[4] 2e4cdab0584f mm: allow page fault handlers to perform the COW
+
+Cc: <stable@vger.kernel.org>
+Cc: Boaz Harrosh <boaz@plexistor.com>
+Cc: Alexander Viro <viro@zeniv.linux.org.uk>
+Cc: Dave Chinner <dchinner@redhat.com>
+Cc: Jan Kara <jack@suse.com>
+Cc: "Kirill A. Shutemov" <kirill.shutemov@linux.intel.com>
+Cc: Matthew Wilcox <matthew.r.wilcox@intel.com>
+Acked-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Signed-off-by: Yigal Korman <yigal@plexistor.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ mm/memory.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/mm/memory.c b/mm/memory.c
+index deb679c31f2a..c387430f06c3 100644
+--- a/mm/memory.c
++++ b/mm/memory.c
+@@ -3015,9 +3015,9 @@ static int do_cow_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 		} else {
+ 			/*
+ 			 * The fault handler has no page to lock, so it holds
+-			 * i_mmap_lock for write to protect against truncate.
++			 * i_mmap_lock for read to protect against truncate.
+ 			 */
+-			i_mmap_unlock_write(vma->vm_file->f_mapping);
++			i_mmap_unlock_read(vma->vm_file->f_mapping);
+ 		}
+ 		goto uncharge_out;
+ 	}
+@@ -3031,9 +3031,9 @@ static int do_cow_fault(struct mm_struct *mm, struct vm_area_struct *vma,
+ 	} else {
+ 		/*
+ 		 * The fault handler has no page to lock, so it holds
+-		 * i_mmap_lock for write to protect against truncate.
++		 * i_mmap_lock for read to protect against truncate.
+ 		 */
+-		i_mmap_unlock_write(vma->vm_file->f_mapping);
++		i_mmap_unlock_read(vma->vm_file->f_mapping);
+ 	}
+ 	return ret;
+ uncharge_out:
+-- 
+2.17.1
+

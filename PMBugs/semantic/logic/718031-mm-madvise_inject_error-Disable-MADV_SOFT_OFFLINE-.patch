@@ -1,0 +1,40 @@
+From 86a66810baa87e5d1c93a51f71d36c7f71fe3113 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Fri, 13 Jul 2018 21:49:56 -0700
+Subject: [PATCH 718031/911378] mm, madvise_inject_error: Disable
+ MADV_SOFT_OFFLINE for ZONE_DEVICE pages
+
+Given that dax / device-mapped pages are never subject to page
+allocations remove them from consideration by the soft-offline
+mechanism.
+
+Reported-by: Naoya Horiguchi <n-horiguchi@ah.jp.nec.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+Acked-by: Naoya Horiguchi <n-horiguchi@ah.jp.nec.com>
+Signed-off-by: Dave Jiang <dave.jiang@intel.com>
+---
+ mm/memory-failure.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/mm/memory-failure.c b/mm/memory-failure.c
+index 9d142b9b86dc..988f977db3d2 100644
+--- a/mm/memory-failure.c
++++ b/mm/memory-failure.c
+@@ -1751,6 +1751,14 @@ int soft_offline_page(struct page *page, int flags)
+ 	int ret;
+ 	unsigned long pfn = page_to_pfn(page);
+ 
++	if (is_zone_device_page(page)) {
++		pr_debug_ratelimited("soft_offline: %#lx page is device page\n",
++				pfn);
++		if (flags & MF_COUNT_INCREASED)
++			put_page(page);
++		return -EIO;
++	}
++
+ 	if (PageHWPoison(page)) {
+ 		pr_info("soft offline: %#lx page already poisoned\n", pfn);
+ 		if (flags & MF_COUNT_INCREASED)
+-- 
+2.17.1
+

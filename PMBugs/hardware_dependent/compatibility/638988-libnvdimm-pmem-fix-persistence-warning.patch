@@ -1,0 +1,41 @@
+From c00b396ef782cb2296200d868a0013d8ca1d615e Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Mon, 29 May 2017 23:11:57 -0700
+Subject: [PATCH 638988/911378] libnvdimm, pmem: fix persistence warning
+
+The pmem driver assumes if platform firmware describes the memory
+devices associated with a persistent memory range and
+CONFIG_ARCH_HAS_PMEM_API=y that it has all the mechanism necessary to
+flush data to a power-fail safe zone. We warn if the firmware does not
+describe memory devices, but we also need to warn if the architecture
+does not claim pmem support.
+
+Cc: Jeff Moyer <jmoyer@redhat.com>
+Cc: Christoph Hellwig <hch@lst.de>
+Cc: Matthew Wilcox <mawilcox@microsoft.com>
+Cc: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/region_devs.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/region_devs.c b/drivers/nvdimm/region_devs.c
+index 3c06a6ea6958..41b4cdf5dea8 100644
+--- a/drivers/nvdimm/region_devs.c
++++ b/drivers/nvdimm/region_devs.c
+@@ -1037,8 +1037,9 @@ int nvdimm_has_flush(struct nd_region *nd_region)
+ {
+ 	int i;
+ 
+-	/* no nvdimm == flushing capability unknown */
+-	if (nd_region->ndr_mappings == 0)
++	/* no nvdimm or pmem api == flushing capability unknown */
++	if (nd_region->ndr_mappings == 0
++			|| !IS_ENABLED(CONFIG_ARCH_HAS_PMEM_API))
+ 		return -ENXIO;
+ 
+ 	for (i = 0; i < nd_region->ndr_mappings; i++) {
+-- 
+2.17.1
+

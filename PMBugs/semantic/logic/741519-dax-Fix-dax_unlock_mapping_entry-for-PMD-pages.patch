@@ -1,0 +1,69 @@
+From fda490d39fc0668d92e170d95c11e35a010019aa Mon Sep 17 00:00:00 2001
+From: Matthew Wilcox <willy@infradead.org>
+Date: Fri, 16 Nov 2018 15:07:31 -0500
+Subject: [PATCH 741519/911378] dax: Fix dax_unlock_mapping_entry for PMD pages
+
+Device DAX PMD pages do not set the PageHead bit for compound pages.
+Fix for now by retrieving the PMD bit from the entry, but eventually we
+will be passed the page size by the caller.
+
+Reported-by: Dan Williams <dan.j.williams@intel.com>
+Fixes: 9f32d221301c ("dax: Convert dax_lock_mapping_entry to XArray")
+Signed-off-by: Matthew Wilcox <willy@infradead.org>
+---
+ fs/dax.c | 17 ++++++++---------
+ 1 file changed, 8 insertions(+), 9 deletions(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index ce87d21b3805..5426252375f6 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -98,12 +98,6 @@ static void *dax_make_entry(pfn_t pfn, unsigned long flags)
+ 	return xa_mk_value(flags | (pfn_t_to_pfn(pfn) << DAX_SHIFT));
+ }
+ 
+-static void *dax_make_page_entry(struct page *page)
+-{
+-	pfn_t pfn = page_to_pfn_t(page);
+-	return dax_make_entry(pfn, PageHead(page) ? DAX_PMD : 0);
+-}
+-
+ static bool dax_is_locked(void *entry)
+ {
+ 	return xa_to_value(entry) & DAX_LOCKED;
+@@ -116,12 +110,12 @@ static unsigned int dax_entry_order(void *entry)
+ 	return 0;
+ }
+ 
+-static int dax_is_pmd_entry(void *entry)
++static unsigned long dax_is_pmd_entry(void *entry)
+ {
+ 	return xa_to_value(entry) & DAX_PMD;
+ }
+ 
+-static int dax_is_pte_entry(void *entry)
++static bool dax_is_pte_entry(void *entry)
+ {
+ 	return !(xa_to_value(entry) & DAX_PMD);
+ }
+@@ -413,11 +407,16 @@ void dax_unlock_mapping_entry(struct page *page)
+ {
+ 	struct address_space *mapping = page->mapping;
+ 	XA_STATE(xas, &mapping->i_pages, page->index);
++	void *entry;
+ 
+ 	if (S_ISCHR(mapping->host->i_mode))
+ 		return;
+ 
+-	dax_unlock_entry(&xas, dax_make_page_entry(page));
++	rcu_read_lock();
++	entry = xas_load(&xas);
++	rcu_read_unlock();
++	entry = dax_make_entry(page_to_pfn_t(page), dax_is_pmd_entry(entry));
++	dax_unlock_entry(&xas, entry);
+ }
+ 
+ /*
+-- 
+2.17.1
+

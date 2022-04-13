@@ -1,0 +1,130 @@
+From 30e235389faadb9e3d918887b1f126155d7d761d Mon Sep 17 00:00:00 2001
+From: Jia He <justin.he@arm.com>
+Date: Wed, 7 Aug 2019 12:58:51 +0800
+Subject: [PATCH 797382/911378] arm64: mm: add missing PTE_SPECIAL in
+ pte_mkdevmap on arm64
+
+Without this patch, the MAP_SYNC test case will cause a print_bad_pte
+warning on arm64 as follows:
+
+[   25.542693] BUG: Bad page map in process mapdax333 pte:2e8000448800f53 pmd:41ff5f003
+[   25.546360] page:ffff7e0010220000 refcount:1 mapcount:-1 mapping:ffff8003e29c7440 index:0x0
+[   25.550281] ext4_dax_aops
+[   25.550282] name:"__aaabbbcccddd__"
+[   25.551553] flags: 0x3ffff0000001002(referenced|reserved)
+[   25.555802] raw: 03ffff0000001002 ffff8003dfffa908 0000000000000000 ffff8003e29c7440
+[   25.559446] raw: 0000000000000000 0000000000000000 00000001fffffffe 0000000000000000
+[   25.563075] page dumped because: bad pte
+[   25.564938] addr:0000ffffbe05b000 vm_flags:208000fb anon_vma:0000000000000000 mapping:ffff8003e29c7440 index:0
+[   25.574272] file:__aaabbbcccddd__ fault:ext4_dax_fault mmmmap:ext4_file_mmap readpage:0x0
+[   25.578799] CPU: 1 PID: 1180 Comm: mapdax333 Not tainted 5.2.0+ #21
+[   25.581702] Hardware name: QEMU KVM Virtual Machine, BIOS 0.0.0 02/06/2015
+[   25.585624] Call trace:
+[   25.587008]  dump_backtrace+0x0/0x178
+[   25.588799]  show_stack+0x24/0x30
+[   25.590328]  dump_stack+0xa8/0xcc
+[   25.591901]  print_bad_pte+0x18c/0x218
+[   25.593628]  unmap_page_range+0x778/0xc00
+[   25.595506]  unmap_single_vma+0x94/0xe8
+[   25.597304]  unmap_vmas+0x90/0x108
+[   25.598901]  unmap_region+0xc0/0x128
+[   25.600566]  __do_munmap+0x284/0x3f0
+[   25.602245]  __vm_munmap+0x78/0xe0
+[   25.603820]  __arm64_sys_munmap+0x34/0x48
+[   25.605709]  el0_svc_common.constprop.0+0x78/0x168
+[   25.607956]  el0_svc_handler+0x34/0x90
+[   25.609698]  el0_svc+0x8/0xc
+[...]
+
+The root cause is in _vm_normal_page, without the PTE_SPECIAL bit,
+the return value will be incorrectly set to pfn_to_page(pfn) instead
+of NULL. Besides, this patch also rewrite the pmd_mkdevmap to avoid
+setting PTE_SPECIAL for pmd
+
+The MAP_SYNC test case is as follows(Provided by Yibo Cai)
+$#include <stdio.h>
+$#include <string.h>
+$#include <unistd.h>
+$#include <sys/file.h>
+$#include <sys/mman.h>
+
+$#ifndef MAP_SYNC
+$#define MAP_SYNC 0x80000
+$#endif
+
+/* mount -o dax /dev/pmem0 /mnt */
+$#define F "/mnt/__aaabbbcccddd__"
+
+int main(void)
+{
+    int fd;
+    char buf[4096];
+    void *addr;
+
+    if ((fd = open(F, O_CREAT|O_TRUNC|O_RDWR, 0644)) < 0) {
+        perror("open1");
+        return 1;
+    }
+
+    if (write(fd, buf, 4096) != 4096) {
+        perror("lseek");
+        return 1;
+    }
+
+    addr = mmap(NULL, 4096, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_SYNC, fd, 0);
+    if (addr == MAP_FAILED) {
+        perror("mmap");
+        printf("did you mount with '-o dax'?\n");
+        return 1;
+    }
+
+    memset(addr, 0x55, 4096);
+
+    if (munmap(addr, 4096) == -1) {
+        perror("munmap");
+        return 1;
+    }
+
+    close(fd);
+
+    return 0;
+}
+
+Fixes: 73b20c84d42d ("arm64: mm: implement pte_devmap support")
+Reported-by: Yibo Cai <Yibo.Cai@arm.com>
+Acked-by: Will Deacon <will@kernel.org>
+Acked-by: Robin Murphy <Robin.Murphy@arm.com>
+Signed-off-by: Jia He <justin.he@arm.com>
+Signed-off-by: Catalin Marinas <catalin.marinas@arm.com>
+---
+ arch/arm64/include/asm/pgtable.h | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/arch/arm64/include/asm/pgtable.h b/arch/arm64/include/asm/pgtable.h
+index 5fdcfe237338..e09760ece844 100644
+--- a/arch/arm64/include/asm/pgtable.h
++++ b/arch/arm64/include/asm/pgtable.h
+@@ -209,7 +209,7 @@ static inline pmd_t pmd_mkcont(pmd_t pmd)
+ 
+ static inline pte_t pte_mkdevmap(pte_t pte)
+ {
+-	return set_pte_bit(pte, __pgprot(PTE_DEVMAP));
++	return set_pte_bit(pte, __pgprot(PTE_DEVMAP | PTE_SPECIAL));
+ }
+ 
+ static inline void set_pte(pte_t *ptep, pte_t pte)
+@@ -396,7 +396,10 @@ static inline int pmd_protnone(pmd_t pmd)
+ #ifdef CONFIG_TRANSPARENT_HUGEPAGE
+ #define pmd_devmap(pmd)		pte_devmap(pmd_pte(pmd))
+ #endif
+-#define pmd_mkdevmap(pmd)	pte_pmd(pte_mkdevmap(pmd_pte(pmd)))
++static inline pmd_t pmd_mkdevmap(pmd_t pmd)
++{
++	return pte_pmd(set_pte_bit(pmd_pte(pmd), __pgprot(PTE_DEVMAP)));
++}
+ 
+ #define __pmd_to_phys(pmd)	__pte_to_phys(pmd_pte(pmd))
+ #define __phys_to_pmd_val(phys)	__phys_to_pte_val(phys)
+-- 
+2.17.1
+

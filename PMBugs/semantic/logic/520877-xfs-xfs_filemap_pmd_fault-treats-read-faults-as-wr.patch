@@ -1,0 +1,73 @@
+From 13ad4fe3e087ab66a140f1e00d98f28aa4e3bb28 Mon Sep 17 00:00:00 2001
+From: Dave Chinner <dchinner@redhat.com>
+Date: Tue, 3 Nov 2015 12:37:02 +1100
+Subject: [PATCH 520877/911378] xfs: xfs_filemap_pmd_fault treats read faults
+ as write faults
+
+The code initially committed didn't have the same checks for write
+faults as the dax_pmd_fault code and hence treats all faults as
+write faults. We can get read faults through this path because they
+is no pmd_mkwrite path for write faults similar to the normal page
+fault path. Hence we need to ensure that we only do c/mtime updates
+on write faults, and freeze protection is unnecessary for read
+faults.
+
+Signed-off-by: Dave Chinner <dchinner@redhat.com>
+Reviewed-by: Brian Foster <bfoster@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ fs/xfs/xfs_file.c | 20 ++++++++++++++++----
+ 1 file changed, 16 insertions(+), 4 deletions(-)
+
+diff --git a/fs/xfs/xfs_file.c b/fs/xfs/xfs_file.c
+index f429662d7d42..ce208e3896aa 100644
+--- a/fs/xfs/xfs_file.c
++++ b/fs/xfs/xfs_file.c
+@@ -1477,7 +1477,7 @@ xfs_file_llseek(
+  *
+  * mmap_sem (MM)
+  *   sb_start_pagefault(vfs, freeze)
+- *     i_mmap_lock (XFS - truncate serialisation)
++ *     i_mmaplock (XFS - truncate serialisation)
+  *       page_lock (MM)
+  *         i_lock (XFS - extent map serialisation)
+  */
+@@ -1545,6 +1545,13 @@ xfs_filemap_fault(
+ 	return ret;
+ }
+ 
++/*
++ * Similar to xfs_filemap_fault(), the DAX fault path can call into here on
++ * both read and write faults. Hence we need to handle both cases. There is no
++ * ->pmd_mkwrite callout for huge pages, so we have a single function here to
++ * handle both cases here. @flags carries the information on the type of fault
++ * occuring.
++ */
+ STATIC int
+ xfs_filemap_pmd_fault(
+ 	struct vm_area_struct	*vma,
+@@ -1561,13 +1568,18 @@ xfs_filemap_pmd_fault(
+ 
+ 	trace_xfs_filemap_pmd_fault(ip);
+ 
+-	sb_start_pagefault(inode->i_sb);
+-	file_update_time(vma->vm_file);
++	if (flags & FAULT_FLAG_WRITE) {
++		sb_start_pagefault(inode->i_sb);
++		file_update_time(vma->vm_file);
++	}
++
+ 	xfs_ilock(XFS_I(inode), XFS_MMAPLOCK_SHARED);
+ 	ret = __dax_pmd_fault(vma, addr, pmd, flags, xfs_get_blocks_dax_fault,
+ 			      NULL);
+ 	xfs_iunlock(XFS_I(inode), XFS_MMAPLOCK_SHARED);
+-	sb_end_pagefault(inode->i_sb);
++
++	if (flags & FAULT_FLAG_WRITE)
++		sb_end_pagefault(inode->i_sb);
+ 
+ 	return ret;
+ }
+-- 
+2.17.1
+

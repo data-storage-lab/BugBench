@@ -1,0 +1,97 @@
+From d9cbe09d39aa13f6924dc5fb88325de7ef01a72e Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Thu, 3 Mar 2016 09:14:36 -0800
+Subject: [PATCH 544815/911378] libnvdimm, pmem: fix 'pfn' support for
+ section-misaligned namespaces
+
+The altmap for a section-misaligned namespace needs to arrange for the
+base_pfn to be section-aligned.  As a result the 'reserve' region (pfns
+from base that do not have a struct page) must be increased.  Otherwise
+we trip the altmap validation check in __add_pages:
+
+	if (altmap->base_pfn != phys_start_pfn
+			|| vmem_altmap_offset(altmap) > nr_pages) {
+		pr_warn_once("memory add fail, invalid altmap\n");
+		return -EINVAL;
+	}
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pfn.h  | 13 +++++++++++++
+ drivers/nvdimm/pmem.c | 24 ++++++++++++++++++++++--
+ 2 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/pfn.h b/drivers/nvdimm/pfn.h
+index cc243754acef..6ee707e5b279 100644
+--- a/drivers/nvdimm/pfn.h
++++ b/drivers/nvdimm/pfn.h
+@@ -15,6 +15,7 @@
+ #define __NVDIMM_PFN_H
+ 
+ #include <linux/types.h>
++#include <linux/mmzone.h>
+ 
+ #define PFN_SIG_LEN 16
+ #define PFN_SIG "NVDIMM_PFN_INFO\0"
+@@ -32,4 +33,16 @@ struct nd_pfn_sb {
+ 	u8 padding[4012];
+ 	__le64 checksum;
+ };
++
++#ifdef CONFIG_SPARSEMEM
++#define PFN_SECTION_ALIGN_DOWN(x) SECTION_ALIGN_DOWN(x)
++#define PFN_SECTION_ALIGN_UP(x) SECTION_ALIGN_UP(x)
++#else
++/*
++ * In this case ZONE_DEVICE=n and we will disable 'pfn' device support,
++ * but we still want pmem to compile.
++ */
++#define PFN_SECTION_ALIGN_DOWN(x) (x)
++#define PFN_SECTION_ALIGN_UP(x) (x)
++#endif
+ #endif /* __NVDIMM_PFN_H */
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index 8d0b54670184..59d568ab7556 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -356,6 +356,26 @@ static int nvdimm_namespace_detach_pfn(struct nd_namespace_common *ndns)
+ 	return 0;
+ }
+ 
++/*
++ * We hotplug memory at section granularity, pad the reserved area from
++ * the previous section base to the namespace base address.
++ */
++static unsigned long init_altmap_base(resource_size_t base)
++{
++	unsigned long base_pfn = __phys_to_pfn(base);
++
++	return PFN_SECTION_ALIGN_DOWN(base_pfn);
++}
++
++static unsigned long init_altmap_reserve(resource_size_t base)
++{
++	unsigned long reserve = __phys_to_pfn(SZ_8K);
++	unsigned long base_pfn = __phys_to_pfn(base);
++
++	reserve += base_pfn - PFN_SECTION_ALIGN_DOWN(base_pfn);
++	return reserve;
++}
++
+ static int nvdimm_namespace_attach_pfn(struct nd_namespace_common *ndns)
+ {
+ 	struct nd_namespace_io *nsio = to_nd_namespace_io(&ndns->dev);
+@@ -369,8 +389,8 @@ static int nvdimm_namespace_attach_pfn(struct nd_namespace_common *ndns)
+ 	phys_addr_t offset;
+ 	int rc;
+ 	struct vmem_altmap __altmap = {
+-		.base_pfn = __phys_to_pfn(nsio->res.start),
+-		.reserve = __phys_to_pfn(SZ_8K),
++		.base_pfn = init_altmap_base(nsio->res.start),
++		.reserve = init_altmap_reserve(nsio->res.start),
+ 	};
+ 
+ 	if (!nd_pfn->uuid || !nd_pfn->ndns)
+-- 
+2.17.1
+

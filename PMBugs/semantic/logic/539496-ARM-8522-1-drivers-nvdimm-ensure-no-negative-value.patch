@@ -1,0 +1,33 @@
+From 82ec2ba2b18109e134f0d4ace69b0c9c253b6d17 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Mon, 15 Feb 2016 09:22:36 +0100
+Subject: [PATCH 539496/911378] ARM: 8522/1: drivers: nvdimm: ensure no
+ negative value gets returned on positive match
+
+This patch ensures that existing bus match callbacks don't return
+negative values (which might be interpreted as potential errors in the
+future) in case of positive match.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Marek Szyprowski <m.szyprowski@samsung.com>
+Signed-off-by: Russell King <rmk+kernel@arm.linux.org.uk>
+---
+ drivers/nvdimm/bus.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/bus.c b/drivers/nvdimm/bus.c
+index 7e2c43f701bc..2b2181cdeb63 100644
+--- a/drivers/nvdimm/bus.c
++++ b/drivers/nvdimm/bus.c
+@@ -62,7 +62,7 @@ static int nvdimm_bus_match(struct device *dev, struct device_driver *drv)
+ {
+ 	struct nd_device_driver *nd_drv = to_nd_device_driver(drv);
+ 
+-	return test_bit(to_nd_device_type(dev), &nd_drv->type);
++	return !!test_bit(to_nd_device_type(dev), &nd_drv->type);
+ }
+ 
+ static struct module *to_bus_provider(struct device *dev)
+-- 
+2.17.1
+

@@ -1,0 +1,37 @@
+From 9c41242817f4b6d908886c0fdb036d9246c50630 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sat, 23 Jan 2016 15:34:10 -0800
+Subject: [PATCH 535164/911378] libnvdimm: fix mode determination for e820
+ devices
+
+Correctly display "safe" mode when a btt is established on a e820/memmap
+defined pmem namespace.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/namespace_devs.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/nvdimm/namespace_devs.c b/drivers/nvdimm/namespace_devs.c
+index 8ebfcaae3f5a..9edf7eb7d17c 100644
+--- a/drivers/nvdimm/namespace_devs.c
++++ b/drivers/nvdimm/namespace_devs.c
+@@ -1277,10 +1277,12 @@ static ssize_t mode_show(struct device *dev,
+ 
+ 	device_lock(dev);
+ 	claim = ndns->claim;
+-	if (pmem_should_map_pages(dev) || (claim && is_nd_pfn(claim)))
+-		mode = "memory";
+-	else if (claim && is_nd_btt(claim))
++	if (claim && is_nd_btt(claim))
+ 		mode = "safe";
++	else if (claim && is_nd_pfn(claim))
++		mode = "memory";
++	else if (!claim && pmem_should_map_pages(dev))
++		mode = "memory";
+ 	else
+ 		mode = "raw";
+ 	rc = sprintf(buf, "%s\n", mode);
+-- 
+2.17.1
+

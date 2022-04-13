@@ -1,0 +1,169 @@
+From 1ca191576fc862b4766f58e41aa362b28a7c1866 Mon Sep 17 00:00:00 2001
+From: Dave Chinner <dchinner@redhat.com>
+Date: Tue, 3 Nov 2015 12:37:00 +1100
+Subject: [PATCH 520874/911378] xfs: Don't use unwritten extents for DAX
+
+DAX has a page fault serialisation problem with block allocation.
+Because it allows concurrent page faults and does not have a page
+lock to serialise faults to the same page, it can get two concurrent
+faults to the page that race.
+
+When two read faults race, this isn't a huge problem as the data
+underlying the page is not changing and so "detect and drop" works
+just fine. The issues are to do with write faults.
+
+When two write faults occur, we serialise block allocation in
+get_blocks() so only one faul will allocate the extent. It will,
+however, be marked as an unwritten extent, and that is where the
+problem lies - the DAX fault code cannot differentiate between a
+block that was just allocated and a block that was preallocated and
+needs zeroing. The result is that both write faults end up zeroing
+the block and attempting to convert it back to written.
+
+The problem is that the first fault can zero and convert before the
+second fault starts zeroing, resulting in the zeroing for the second
+fault overwriting the data that the first fault wrote with zeros.
+The second fault then attempts to convert the unwritten extent,
+which is then a no-op because it's already written. Data loss occurs
+as a result of this race.
+
+Because there is no sane locking construct in the page fault code
+that we can use for serialisation across the page faults, we need to
+ensure block allocation and zeroing occurs atomically in the
+filesystem. This means we can still take concurrent page faults and
+the only time they will serialise is in the filesystem
+mapping/allocation callback. The page fault code will always see
+written, initialised extents, so we will be able to remove the
+unwritten extent handling from the DAX code when all filesystems are
+converted.
+
+Signed-off-by: Dave Chinner <dchinner@redhat.com>
+Reviewed-by: Brian Foster <bfoster@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ fs/dax.c           |  5 +++++
+ fs/xfs/xfs_aops.c  | 13 +++++++++----
+ fs/xfs/xfs_iomap.c | 23 +++++++++++++++++++++--
+ 3 files changed, 35 insertions(+), 6 deletions(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 7ae6df7ea1d2..74033ad1bc92 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -29,6 +29,11 @@
+ #include <linux/uio.h>
+ #include <linux/vmstat.h>
+ 
++/*
++ * dax_clear_blocks() is called from within transaction context from XFS,
++ * and hence this means the stack from this point must follow GFP_NOFS
++ * semantics for all operations.
++ */
+ int dax_clear_blocks(struct inode *inode, sector_t block, long size)
+ {
+ 	struct block_device *bdev = inode->i_sb->s_bdev;
+diff --git a/fs/xfs/xfs_aops.c b/fs/xfs/xfs_aops.c
+index e747d6ad5d18..df3dabd469b9 100644
+--- a/fs/xfs/xfs_aops.c
++++ b/fs/xfs/xfs_aops.c
+@@ -1284,15 +1284,12 @@ xfs_map_direct(
+ 
+ 	trace_xfs_gbmap_direct(XFS_I(inode), offset, size, type, imap);
+ 
+-	/* XXX: preparation for removing unwritten extents in DAX */
+-#if 0
+ 	if (dax_fault) {
+ 		ASSERT(type == XFS_IO_OVERWRITE);
+ 		trace_xfs_gbmap_direct_none(XFS_I(inode), offset, size, type,
+ 					    imap);
+ 		return;
+ 	}
+-#endif
+ 
+ 	if (bh_result->b_private) {
+ 		ioend = bh_result->b_private;
+@@ -1420,10 +1417,12 @@ __xfs_get_blocks(
+ 	if (error)
+ 		goto out_unlock;
+ 
++	/* for DAX, we convert unwritten extents directly */
+ 	if (create &&
+ 	    (!nimaps ||
+ 	     (imap.br_startblock == HOLESTARTBLOCK ||
+-	      imap.br_startblock == DELAYSTARTBLOCK))) {
++	      imap.br_startblock == DELAYSTARTBLOCK) ||
++	     (IS_DAX(inode) && ISUNWRITTEN(&imap)))) {
+ 		if (direct || xfs_get_extsz_hint(ip)) {
+ 			/*
+ 			 * Drop the ilock in preparation for starting the block
+@@ -1468,6 +1467,12 @@ __xfs_get_blocks(
+ 		goto out_unlock;
+ 	}
+ 
++	if (IS_DAX(inode) && create) {
++		ASSERT(!ISUNWRITTEN(&imap));
++		/* zeroing is not needed at a higher layer */
++		new = 0;
++	}
++
+ 	/* trim mapping down to size requested */
+ 	if (direct || size > (1 << inode->i_blkbits))
+ 		xfs_map_trim_size(inode, iblock, bh_result,
+diff --git a/fs/xfs/xfs_iomap.c b/fs/xfs/xfs_iomap.c
+index 1f86033171c8..b48c6b525e77 100644
+--- a/fs/xfs/xfs_iomap.c
++++ b/fs/xfs/xfs_iomap.c
+@@ -131,6 +131,7 @@ xfs_iomap_write_direct(
+ 	uint		qblocks, resblks, resrtextents;
+ 	int		committed;
+ 	int		error;
++	int		bmapi_flags = XFS_BMAPI_PREALLOC;
+ 
+ 	error = xfs_qm_dqattach(ip, 0);
+ 	if (error)
+@@ -177,6 +178,23 @@ xfs_iomap_write_direct(
+ 	 * Allocate and setup the transaction
+ 	 */
+ 	tp = xfs_trans_alloc(mp, XFS_TRANS_DIOSTRAT);
++
++	/*
++	 * For DAX, we do not allocate unwritten extents, but instead we zero
++	 * the block before we commit the transaction.  Ideally we'd like to do
++	 * this outside the transaction context, but if we commit and then crash
++	 * we may not have zeroed the blocks and this will be exposed on
++	 * recovery of the allocation. Hence we must zero before commit.
++	 * Further, if we are mapping unwritten extents here, we need to zero
++	 * and convert them to written so that we don't need an unwritten extent
++	 * callback for DAX. This also means that we need to be able to dip into
++	 * the reserve block pool if there is no space left but we need to do
++	 * unwritten extent conversion.
++	 */
++	if (IS_DAX(VFS_I(ip))) {
++		bmapi_flags = XFS_BMAPI_CONVERT | XFS_BMAPI_ZERO;
++		tp->t_flags |= XFS_TRANS_RESERVE;
++	}
+ 	error = xfs_trans_reserve(tp, &M_RES(mp)->tr_write,
+ 				  resblks, resrtextents);
+ 	/*
+@@ -202,8 +220,8 @@ xfs_iomap_write_direct(
+ 	xfs_bmap_init(&free_list, &firstfsb);
+ 	nimaps = 1;
+ 	error = xfs_bmapi_write(tp, ip, offset_fsb, count_fsb,
+-				XFS_BMAPI_PREALLOC, &firstfsb, 0,
+-				imap, &nimaps, &free_list);
++				bmapi_flags, &firstfsb, 0, imap,
++				&nimaps, &free_list);
+ 	if (error)
+ 		goto out_bmap_cancel;
+ 
+@@ -213,6 +231,7 @@ xfs_iomap_write_direct(
+ 	error = xfs_bmap_finish(&tp, &free_list, &committed);
+ 	if (error)
+ 		goto out_bmap_cancel;
++
+ 	error = xfs_trans_commit(tp);
+ 	if (error)
+ 		goto out_unlock;
+-- 
+2.17.1
+

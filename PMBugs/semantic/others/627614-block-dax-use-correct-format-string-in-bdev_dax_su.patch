@@ -1,0 +1,38 @@
+From 67fd38973513c341c84654ae2f819089b840a39b Mon Sep 17 00:00:00 2001
+From: Arnd Bergmann <arnd@arndb.de>
+Date: Thu, 27 Apr 2017 16:30:41 +0200
+Subject: [PATCH 627614/911378] block, dax: use correct format string in
+ bdev_dax_supported
+
+The new message has an incorrect format string, causing a warning in some
+configurations:
+
+fs/block_dev.c: In function 'bdev_dax_supported':
+fs/block_dev.c:779:5: error: format '%d' expects argument of type 'int', but argument 2 has type 'long int' [-Werror=format=]
+     "error: dax access failed (%d)", len);
+
+This changes it to use the correct %ld instead of %d.
+
+Fixes: 2093f2e9dfec ("block, dax: convert bdev_dax_supported() to dax_direct_access()")
+Signed-off-by: Arnd Bergmann <arnd@arndb.de>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ fs/block_dev.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/block_dev.c b/fs/block_dev.c
+index 10e21465d5a9..666367e13711 100644
+--- a/fs/block_dev.c
++++ b/fs/block_dev.c
+@@ -776,7 +776,7 @@ int bdev_dax_supported(struct super_block *sb, int blocksize)
+ 
+ 	if (len < 1) {
+ 		vfs_msg(sb, KERN_ERR,
+-				"error: dax access failed (%d)", len);
++				"error: dax access failed (%ld)", len);
+ 		return len < 0 ? len : -EIO;
+ 	}
+ 
+-- 
+2.17.1
+

@@ -1,0 +1,47 @@
+From 819ec6b91d5ba1ca313066a306461774eff6b567 Mon Sep 17 00:00:00 2001
+From: Jeff Layton <jlayton@redhat.com>
+Date: Thu, 6 Jul 2017 07:02:27 -0400
+Subject: [PATCH 640620/911378] dax: set errors in mapping when writeback fails
+
+Jan Kara's description for this patch is much better than mine, so I'm
+quoting it verbatim here:
+
+DAX currently doesn't set errors in the mapping when cache flushing
+fails in dax_writeback_mapping_range(). Since this function can get
+called only from fsync(2) or sync(2), this is actually as good as it can
+currently get since we correctly propagate the error up from
+dax_writeback_mapping_range() to filemap_fdatawrite()
+
+However, in the future better writeback error handling will enable us to
+properly report these errors on fsync(2) even if there are multiple file
+descriptors open against the file or if sync(2) gets called before
+fsync(2). So convert DAX to using standard error reporting through the
+mapping.
+
+Signed-off-by: Jeff Layton <jlayton@redhat.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Reviewed-and-tested-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+---
+ fs/dax.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index c22eaf162f95..441280e15d5b 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -856,8 +856,10 @@ int dax_writeback_mapping_range(struct address_space *mapping,
+ 
+ 			ret = dax_writeback_one(bdev, dax_dev, mapping,
+ 					indices[i], pvec.pages[i]);
+-			if (ret < 0)
++			if (ret < 0) {
++				mapping_set_error(mapping, ret);
+ 				goto out;
++			}
+ 		}
+ 	}
+ out:
+-- 
+2.17.1
+

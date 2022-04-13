@@ -1,0 +1,53 @@
+From 5e24c9fd36285535c704e84748d6c890be870fb6 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sat, 21 May 2016 11:01:41 -0700
+Subject: [PATCH 560373/911378] libnvdimm, dax: fix alignment validation
+
+Testing the dax-device autodetect support revealed a probe failure with
+the following result:
+
+    dax0.1: bad offset: 0x8200000 dax disabled
+
+The original pfn-device implementation inferred the alignment from
+ilog2(offset), now that the alignment is explicit the is_power_of_2()
+needs replacing with a real sanity check against the recorded alignment.
+Otherwise the alignment check is useless in the implicit case and only
+the minimum size of the offset matters.
+
+This self-consistency check is further validated by the probe path that
+will re-check that the offset is large enough to contain all the
+metadata required to enable the device.
+
+Cc: <stable@vger.kernel.org>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pfn_devs.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 816cd9828ca5..04f71d6d304d 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -416,6 +416,8 @@ int nd_pfn_validate(struct nd_pfn *nd_pfn, const char *sig)
+ 			return -ENODEV;
+ 	}
+ 
++	if (nd_pfn->align == 0)
++		nd_pfn->align = le32_to_cpu(pfn_sb->align);
+ 	if (nd_pfn->align > nvdimm_namespace_capacity(ndns)) {
+ 		dev_err(&nd_pfn->dev, "alignment: %lx exceeds capacity %llx\n",
+ 				nd_pfn->align, nvdimm_namespace_capacity(ndns));
+@@ -436,8 +438,8 @@ int nd_pfn_validate(struct nd_pfn *nd_pfn, const char *sig)
+ 		return -EBUSY;
+ 	}
+ 
+-	nd_pfn->align = le32_to_cpu(pfn_sb->align);
+-	if (!is_power_of_2(offset) || offset < PAGE_SIZE) {
++	if ((nd_pfn->align && !IS_ALIGNED(offset, nd_pfn->align))
++			|| !IS_ALIGNED(offset, PAGE_SIZE)) {
+ 		dev_err(&nd_pfn->dev, "bad offset: %#llx dax disabled\n",
+ 				offset);
+ 		return -ENXIO;
+-- 
+2.17.1
+

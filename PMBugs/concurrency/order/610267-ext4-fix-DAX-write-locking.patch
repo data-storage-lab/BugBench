@@ -1,0 +1,55 @@
+From ff5462e39ca1d27e530d088c4e38741fd9cddad4 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Wed, 8 Feb 2017 14:39:27 -0500
+Subject: [PATCH 610267/911378] ext4: fix DAX write locking
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Unlike O_DIRECT DAX is not an optional opt-in feature selected by the
+application, so we'll have to provide the traditional synchronіzation
+of overlapping writes as we do for buffered writes.
+
+This was broken historically for DAX, but got fixed for ext2 and XFS
+as part of the iomap conversion.  Fix up ext4 as well.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+Reviewed-by: Jan Kara <jack@suse.cz>
+---
+ fs/ext4/file.c | 10 +---------
+ 1 file changed, 1 insertion(+), 9 deletions(-)
+
+diff --git a/fs/ext4/file.c b/fs/ext4/file.c
+index ff3f6107b0ba..87e11dfe3cde 100644
+--- a/fs/ext4/file.c
++++ b/fs/ext4/file.c
+@@ -178,7 +178,6 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
+ {
+ 	struct inode *inode = file_inode(iocb->ki_filp);
+ 	ssize_t ret;
+-	bool overwrite = false;
+ 
+ 	inode_lock(inode);
+ 	ret = ext4_write_checks(iocb, from);
+@@ -191,16 +190,9 @@ ext4_dax_write_iter(struct kiocb *iocb, struct iov_iter *from)
+ 	if (ret)
+ 		goto out;
+ 
+-	if (ext4_overwrite_io(inode, iocb->ki_pos, iov_iter_count(from))) {
+-		overwrite = true;
+-		downgrade_write(&inode->i_rwsem);
+-	}
+ 	ret = dax_iomap_rw(iocb, from, &ext4_iomap_ops);
+ out:
+-	if (!overwrite)
+-		inode_unlock(inode);
+-	else
+-		inode_unlock_shared(inode);
++	inode_unlock(inode);
+ 	if (ret > 0)
+ 		ret = generic_write_sync(iocb, ret);
+ 	return ret;
+-- 
+2.17.1
+

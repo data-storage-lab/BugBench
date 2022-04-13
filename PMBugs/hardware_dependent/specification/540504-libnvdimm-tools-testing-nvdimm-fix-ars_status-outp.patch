@@ -1,0 +1,150 @@
+From 747ffe11b440ef9ea752888806d3aac677ca52a4 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Fri, 19 Feb 2016 15:21:14 -0800
+Subject: [PATCH 540504/911378] libnvdimm, tools/testing/nvdimm: fix
+ 'ars_status' output buffer sizing
+
+Use the output length specified in the command to size the receive
+buffer rather than the arbitrary 4K limit.
+
+This bug was hiding the fact that the ndctl implementation of
+ndctl_bus_cmd_new_ars_status() was not specifying an output buffer size.
+
+Cc: <stable@vger.kernel.org>
+Cc: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/acpi/nfit.c              | 13 +++++++------
+ drivers/nvdimm/bus.c             |  8 ++++----
+ include/linux/libnvdimm.h        |  1 -
+ tools/testing/nvdimm/test/nfit.c |  8 ++++++--
+ 4 files changed, 17 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/acpi/nfit.c b/drivers/acpi/nfit.c
+index 424b362e8fdc..1d4b9c6bdf45 100644
+--- a/drivers/acpi/nfit.c
++++ b/drivers/acpi/nfit.c
+@@ -1516,13 +1516,13 @@ static int ars_do_start(struct nvdimm_bus_descriptor *nd_desc,
+ }
+ 
+ static int ars_get_status(struct nvdimm_bus_descriptor *nd_desc,
+-		struct nd_cmd_ars_status *cmd)
++		struct nd_cmd_ars_status *cmd, u32 size)
+ {
+ 	int rc;
+ 
+ 	while (1) {
+ 		rc = nd_desc->ndctl(nd_desc, NULL, ND_CMD_ARS_STATUS, cmd,
+-			sizeof(*cmd));
++			size);
+ 		if (rc || cmd->status & 0xffff)
+ 			return -ENXIO;
+ 
+@@ -1580,6 +1580,7 @@ static int acpi_nfit_find_poison(struct acpi_nfit_desc *acpi_desc,
+ 	struct nd_cmd_ars_start *ars_start = NULL;
+ 	struct nd_cmd_ars_cap *ars_cap = NULL;
+ 	u64 start, len, cur, remaining;
++	u32 ars_status_size;
+ 	int rc;
+ 
+ 	ars_cap = kzalloc(sizeof(*ars_cap), GFP_KERNEL);
+@@ -1609,14 +1610,14 @@ static int acpi_nfit_find_poison(struct acpi_nfit_desc *acpi_desc,
+ 	 * Check if a full-range ARS has been run. If so, use those results
+ 	 * without having to start a new ARS.
+ 	 */
+-	ars_status = kzalloc(ars_cap->max_ars_out + sizeof(*ars_status),
+-			GFP_KERNEL);
++	ars_status_size = ars_cap->max_ars_out;
++	ars_status = kzalloc(ars_status_size, GFP_KERNEL);
+ 	if (!ars_status) {
+ 		rc = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+-	rc = ars_get_status(nd_desc, ars_status);
++	rc = ars_get_status(nd_desc, ars_status, ars_status_size);
+ 	if (rc)
+ 		goto out;
+ 
+@@ -1646,7 +1647,7 @@ static int acpi_nfit_find_poison(struct acpi_nfit_desc *acpi_desc,
+ 		if (rc)
+ 			goto out;
+ 
+-		rc = ars_get_status(nd_desc, ars_status);
++		rc = ars_get_status(nd_desc, ars_status, ars_status_size);
+ 		if (rc)
+ 			goto out;
+ 
+diff --git a/drivers/nvdimm/bus.c b/drivers/nvdimm/bus.c
+index 7e2c43f701bc..99953b34fa1d 100644
+--- a/drivers/nvdimm/bus.c
++++ b/drivers/nvdimm/bus.c
+@@ -392,8 +392,8 @@ static const struct nd_cmd_desc __nd_cmd_bus_descs[] = {
+ 		.out_sizes = { 4, },
+ 	},
+ 	[ND_CMD_ARS_STATUS] = {
+-		.out_num = 2,
+-		.out_sizes = { 4, UINT_MAX, },
++		.out_num = 3,
++		.out_sizes = { 4, 4, UINT_MAX, },
+ 	},
+ };
+ 
+@@ -442,8 +442,8 @@ u32 nd_cmd_out_size(struct nvdimm *nvdimm, int cmd,
+ 		return in_field[1];
+ 	else if (nvdimm && cmd == ND_CMD_VENDOR && idx == 2)
+ 		return out_field[1];
+-	else if (!nvdimm && cmd == ND_CMD_ARS_STATUS && idx == 1)
+-		return ND_CMD_ARS_STATUS_MAX;
++	else if (!nvdimm && cmd == ND_CMD_ARS_STATUS && idx == 2)
++		return out_field[1] - 8;
+ 
+ 	return UINT_MAX;
+ }
+diff --git a/include/linux/libnvdimm.h b/include/linux/libnvdimm.h
+index bed40dff0e86..c736382fd260 100644
+--- a/include/linux/libnvdimm.h
++++ b/include/linux/libnvdimm.h
+@@ -28,7 +28,6 @@ enum {
+ 	ND_IOCTL_MAX_BUFLEN = SZ_4M,
+ 	ND_CMD_MAX_ELEM = 4,
+ 	ND_CMD_MAX_ENVELOPE = 16,
+-	ND_CMD_ARS_STATUS_MAX = SZ_4K,
+ 	ND_MAX_MAPPINGS = 32,
+ 
+ 	/* region flag indicating to direct-map persistent memory by default */
+diff --git a/tools/testing/nvdimm/test/nfit.c b/tools/testing/nvdimm/test/nfit.c
+index 90bd2ea41032..b3281dcd4a5d 100644
+--- a/tools/testing/nvdimm/test/nfit.c
++++ b/tools/testing/nvdimm/test/nfit.c
+@@ -217,13 +217,16 @@ static int nfit_test_cmd_set_config_data(struct nd_cmd_set_config_hdr *nd_cmd,
+ 	return rc;
+ }
+ 
++#define NFIT_TEST_ARS_RECORDS 4
++
+ static int nfit_test_cmd_ars_cap(struct nd_cmd_ars_cap *nd_cmd,
+ 		unsigned int buf_len)
+ {
+ 	if (buf_len < sizeof(*nd_cmd))
+ 		return -EINVAL;
+ 
+-	nd_cmd->max_ars_out = 256;
++	nd_cmd->max_ars_out = sizeof(struct nd_cmd_ars_status)
++		+ NFIT_TEST_ARS_RECORDS * sizeof(struct nd_ars_record);
+ 	nd_cmd->status = (ND_ARS_PERSISTENT | ND_ARS_VOLATILE) << 16;
+ 
+ 	return 0;
+@@ -246,7 +249,8 @@ static int nfit_test_cmd_ars_status(struct nd_cmd_ars_status *nd_cmd,
+ 	if (buf_len < sizeof(*nd_cmd))
+ 		return -EINVAL;
+ 
+-	nd_cmd->out_length = 256;
++	nd_cmd->out_length = sizeof(struct nd_cmd_ars_status);
++	/* TODO: emit error records */
+ 	nd_cmd->num_records = 0;
+ 	nd_cmd->address = 0;
+ 	nd_cmd->length = -1ULL;
+-- 
+2.17.1
+

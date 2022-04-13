@@ -1,0 +1,46 @@
+From b0d65a8cbcb097d2110885c3660add97b0125867 Mon Sep 17 00:00:00 2001
+From: Oliver O'Halloran <oohall@gmail.com>
+Date: Fri, 7 Dec 2018 02:17:12 +1100
+Subject: [PATCH 746156/911378] powerpc/papr_scm: Fix DIMM device registration
+ race
+
+When a new nvdimm device is registered with libnvdimm via
+nvdimm_create() it is added as a device on the nvdimm bus. The probe
+function for the DIMM driver is potentially quite slow so actually
+registering and probing the device is done in an async domain rather
+than immediately after device creation. This can result in a race where
+the region device (created 2nd) is probed first and fails to activate at
+boot.
+
+To fix this we use the same approach as the ACPI/NFIT driver which is to
+check that all the DIMM devices registered successfully. LibNVDIMM
+provides the nvdimm_bus_count_dimms() function which synchronises with
+the async domain and verifies that the dimm was successfully registered
+with the bus.
+
+If either of these does not occur then we bail.
+
+Fixes: b5beae5e224f ("powerpc/pseries: Add driver for PAPR SCM regions")
+Signed-off-by: Oliver O'Halloran <oohall@gmail.com>
+Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+---
+ arch/powerpc/platforms/pseries/papr_scm.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/arch/powerpc/platforms/pseries/papr_scm.c b/arch/powerpc/platforms/pseries/papr_scm.c
+index 8b5153c55da6..7dc6a751cb4c 100644
+--- a/arch/powerpc/platforms/pseries/papr_scm.c
++++ b/arch/powerpc/platforms/pseries/papr_scm.c
+@@ -223,6 +223,9 @@ static int papr_scm_nvdimm_init(struct papr_scm_priv *p)
+ 		goto err;
+ 	}
+ 
++	if (nvdimm_bus_check_dimm_count(p->bus, 1))
++		goto err;
++
+ 	/* now add the region */
+ 
+ 	memset(&mapping, 0, sizeof(mapping));
+-- 
+2.17.1
+

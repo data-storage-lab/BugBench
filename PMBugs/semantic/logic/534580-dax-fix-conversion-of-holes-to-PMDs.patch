@@ -1,0 +1,98 @@
+From de14b9cb5e02b5daaea139590393af5ccccc4229 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 22 Jan 2016 15:10:34 -0800
+Subject: [PATCH 534580/911378] dax: fix conversion of holes to PMDs
+
+When we get a DAX PMD fault for a write it is possible that there could
+be some number of 4k zero pages already present for the same range that
+were inserted to service reads from a hole.  These 4k zero pages need to
+be unmapped from the VMAs and removed from the struct address_space
+radix tree before the real DAX PMD entry can be inserted.
+
+For PTE faults this same use case also exists and is handled by a
+combination of unmap_mapping_range() to unmap the VMAs and
+delete_from_page_cache() to remove the page from the address_space radix
+tree.
+
+For PMD faults we do have a call to unmap_mapping_range() (protected by
+a buffer_new() check), but nothing clears out the radix tree entry.  The
+buffer_new() check is also incorrect as the current ext4 and XFS
+filesystem code will never return a buffer_head with BH_New set, even
+when allocating new blocks over a hole.  Instead the filesystem will
+zero the blocks manually and return a buffer_head with only BH_Mapped
+set.
+
+Fix this situation by removing the buffer_new() check and adding a call
+to truncate_inode_pages_range() to clear out the radix tree entries
+before we insert the DAX PMD.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reported-by: Dan Williams <dan.j.williams@intel.com>
+Tested-by: Dan Williams <dan.j.williams@intel.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Cc: "H. Peter Anvin" <hpa@zytor.com>
+Cc: "J. Bruce Fields" <bfields@fieldses.org>
+Cc: "Theodore Ts'o" <tytso@mit.edu>
+Cc: Alexander Viro <viro@zeniv.linux.org.uk>
+Cc: Andreas Dilger <adilger.kernel@dilger.ca>
+Cc: Dave Chinner <david@fromorbit.com>
+Cc: Ingo Molnar <mingo@redhat.com>
+Cc: Jeff Layton <jlayton@poochiereds.net>
+Cc: Matthew Wilcox <willy@linux.intel.com>
+Cc: Thomas Gleixner <tglx@linutronix.de>
+Cc: Matthew Wilcox <matthew.r.wilcox@intel.com>
+Cc: Dave Hansen <dave.hansen@linux.intel.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/dax.c | 20 ++++++++++----------
+ 1 file changed, 10 insertions(+), 10 deletions(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 513bba5f1e02..5b84a46201c2 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -589,6 +589,7 @@ int __dax_pmd_fault(struct vm_area_struct *vma, unsigned long address,
+ 	bool write = flags & FAULT_FLAG_WRITE;
+ 	struct block_device *bdev;
+ 	pgoff_t size, pgoff;
++	loff_t lstart, lend;
+ 	sector_t block;
+ 	int result = 0;
+ 
+@@ -643,15 +644,13 @@ int __dax_pmd_fault(struct vm_area_struct *vma, unsigned long address,
+ 		goto fallback;
+ 	}
+ 
+-	/*
+-	 * If we allocated new storage, make sure no process has any
+-	 * zero pages covering this hole
+-	 */
+-	if (buffer_new(&bh)) {
+-		i_mmap_unlock_read(mapping);
+-		unmap_mapping_range(mapping, pgoff << PAGE_SHIFT, PMD_SIZE, 0);
+-		i_mmap_lock_read(mapping);
+-	}
++	/* make sure no process has any zero pages covering this hole */
++	lstart = pgoff << PAGE_SHIFT;
++	lend = lstart + PMD_SIZE - 1; /* inclusive */
++	i_mmap_unlock_read(mapping);
++	unmap_mapping_range(mapping, lstart, PMD_SIZE, 0);
++	truncate_inode_pages_range(mapping, lstart, lend);
++	i_mmap_lock_read(mapping);
+ 
+ 	/*
+ 	 * If a truncate happened while we were allocating blocks, we may
+@@ -665,7 +664,8 @@ int __dax_pmd_fault(struct vm_area_struct *vma, unsigned long address,
+ 		goto out;
+ 	}
+ 	if ((pgoff | PG_PMD_COLOUR) >= size) {
+-		dax_pmd_dbg(&bh, address, "pgoff unaligned");
++		dax_pmd_dbg(&bh, address,
++				"offset + huge page size > file size");
+ 		goto fallback;
+ 	}
+ 
+-- 
+2.17.1
+

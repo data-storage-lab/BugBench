@@ -1,0 +1,66 @@
+From 17879e8f865f4ed8b6f9041a2687ad40f13ae460 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Mon, 19 Sep 2016 11:24:50 +1000
+Subject: [PATCH 583288/911378] xfs: fix locking for DAX writes
+
+So far DAX writes inherited the locking from direct I/O writes, but
+the direct I/O model of using shared locks for writes is actually
+wrong for DAX.  For direct I/O we're out of any standards and don't
+have to provide the Posix required exclusion between writers, but
+for DAX which gets transparently enable on applications without any
+knowledge of it we can't simply drop the requirement.  Even worse
+this only happens for aligned writes and thus doesn't show up for
+many typical use cases.
+
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Reviewed-by: Dave Chinner <dchinner@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ fs/xfs/xfs_file.c | 20 +-------------------
+ 1 file changed, 1 insertion(+), 19 deletions(-)
+
+diff --git a/fs/xfs/xfs_file.c b/fs/xfs/xfs_file.c
+index e612a0233710..62649ccdbb4d 100644
+--- a/fs/xfs/xfs_file.c
++++ b/fs/xfs/xfs_file.c
+@@ -714,24 +714,11 @@ xfs_file_dax_write(
+ 	struct address_space	*mapping = iocb->ki_filp->f_mapping;
+ 	struct inode		*inode = mapping->host;
+ 	struct xfs_inode	*ip = XFS_I(inode);
+-	struct xfs_mount	*mp = ip->i_mount;
+ 	ssize_t			ret = 0;
+-	int			unaligned_io = 0;
+-	int			iolock;
++	int			iolock = XFS_IOLOCK_EXCL;
+ 	struct iov_iter		data;
+ 
+-	/* "unaligned" here means not aligned to a filesystem block */
+-	if ((iocb->ki_pos & mp->m_blockmask) ||
+-	    ((iocb->ki_pos + iov_iter_count(from)) & mp->m_blockmask)) {
+-		unaligned_io = 1;
+-		iolock = XFS_IOLOCK_EXCL;
+-	} else if (mapping->nrpages) {
+-		iolock = XFS_IOLOCK_EXCL;
+-	} else {
+-		iolock = XFS_IOLOCK_SHARED;
+-	}
+ 	xfs_rw_ilock(ip, iolock);
+-
+ 	ret = xfs_file_aio_write_checks(iocb, from, &iolock);
+ 	if (ret)
+ 		goto out;
+@@ -758,11 +745,6 @@ xfs_file_dax_write(
+ 		WARN_ON_ONCE(ret);
+ 	}
+ 
+-	if (iolock == XFS_IOLOCK_EXCL && !unaligned_io) {
+-		xfs_rw_ilock_demote(ip, XFS_IOLOCK_EXCL);
+-		iolock = XFS_IOLOCK_SHARED;
+-	}
+-
+ 	trace_xfs_file_dax_write(ip, iov_iter_count(from), iocb->ki_pos);
+ 
+ 	data = *from;
+-- 
+2.17.1
+

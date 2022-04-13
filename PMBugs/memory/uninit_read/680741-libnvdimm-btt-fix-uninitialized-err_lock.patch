@@ -1,0 +1,49 @@
+From d08cd5e0eb632eef7819ba911c09d89a767f2d0c Mon Sep 17 00:00:00 2001
+From: Jeff Moyer <jmoyer@redhat.com>
+Date: Wed, 13 Dec 2017 16:33:09 -0500
+Subject: [PATCH 680741/911378] libnvdimm, btt: fix uninitialized err_lock
+
+When a sector mode namespace is initially created, the arena's err_lock
+is not initialized.  If, on the other hand, the namespace already
+exists, the mutex is initialized.  To fix the issue, I moved the mutex
+initialization into the arena_alloc, which is called by both
+discover_arenas and create_arenas.
+
+This was discovered on an older kernel where mutex_trylock checks the
+count to determine whether the lock is held.  Because the data structure
+is kzalloc-d, that count was 0 (held), and I/O to the device would hang
+forever waiting for the lock to be released (see btt_write_pg, for
+example).  Current kernels have a different mutex implementation that
+checks for a non-null owner, and so this doesn't show up as a problem.
+If that lock were ever contended, it might cause issues, but you'd have
+to be really unlucky, I think.
+
+Signed-off-by: Jeff Moyer <jmoyer@redhat.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/btt.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/btt.c b/drivers/nvdimm/btt.c
+index e949e3302af4..5860f99113c6 100644
+--- a/drivers/nvdimm/btt.c
++++ b/drivers/nvdimm/btt.c
+@@ -630,6 +630,7 @@ static struct arena_info *alloc_arena(struct btt *btt, size_t size,
+ 		return NULL;
+ 	arena->nd_btt = btt->nd_btt;
+ 	arena->sector_size = btt->sector_size;
++	mutex_init(&arena->err_lock);
+ 
+ 	if (!size)
+ 		return arena;
+@@ -758,7 +759,6 @@ static int discover_arenas(struct btt *btt)
+ 		arena->external_lba_start = cur_nlba;
+ 		parse_arena_meta(arena, super, cur_off);
+ 
+-		mutex_init(&arena->err_lock);
+ 		ret = btt_freelist_init(arena);
+ 		if (ret)
+ 			goto out;
+-- 
+2.17.1
+

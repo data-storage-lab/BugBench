@@ -1,0 +1,78 @@
+From 348e967ab07c96a9e7a6a194812254a8df2045c0 Mon Sep 17 00:00:00 2001
+From: Jan Kara <jack@suse.cz>
+Date: Thu, 12 May 2016 18:29:15 +0200
+Subject: [PATCH 559818/911378] dax: Make huge page handling depend of
+ CONFIG_BROKEN
+
+Currently the handling of huge pages for DAX is racy. For example the
+following can happen:
+
+CPU0 (THP write fault)			CPU1 (normal read fault)
+
+__dax_pmd_fault()			__dax_fault()
+  get_block(inode, block, &bh, 0) -> not mapped
+					get_block(inode, block, &bh, 0)
+					  -> not mapped
+  if (!buffer_mapped(&bh) && write)
+    get_block(inode, block, &bh, 1) -> allocates blocks
+  truncate_pagecache_range(inode, lstart, lend);
+					dax_load_hole();
+
+This results in data corruption since process on CPU1 won't see changes
+into the file done by CPU0.
+
+The race can happen even if two normal faults race however with THP the
+situation is even worse because the two faults don't operate on the same
+entries in the radix tree and we want to use these entries for
+serialization. So make THP support in DAX code depend on CONFIG_BROKEN
+for now.
+
+Signed-off-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+---
+ fs/Kconfig          | 1 +
+ fs/dax.c            | 2 +-
+ include/linux/dax.h | 2 +-
+ 3 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/fs/Kconfig b/fs/Kconfig
+index 6725f59c18e6..b8fcb416be72 100644
+--- a/fs/Kconfig
++++ b/fs/Kconfig
+@@ -52,6 +52,7 @@ config FS_DAX_PMD
+ 	depends on FS_DAX
+ 	depends on ZONE_DEVICE
+ 	depends on TRANSPARENT_HUGEPAGE
++	depends on BROKEN
+ 
+ endif # BLOCK
+ 
+diff --git a/fs/dax.c b/fs/dax.c
+index bdad05213e4b..0433a2b5e484 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -675,7 +675,7 @@ int dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf,
+ }
+ EXPORT_SYMBOL_GPL(dax_fault);
+ 
+-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++#if defined(CONFIG_TRANSPARENT_HUGEPAGE)
+ /*
+  * The 'colour' (ie low bits) within a PMD of a page offset.  This comes up
+  * more often than one might expect in the below function.
+diff --git a/include/linux/dax.h b/include/linux/dax.h
+index 90fbc99e5313..72dc81de3ddb 100644
+--- a/include/linux/dax.h
++++ b/include/linux/dax.h
+@@ -29,7 +29,7 @@ static inline int __dax_zero_page_range(struct block_device *bdev,
+ }
+ #endif
+ 
+-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
++#if defined(CONFIG_TRANSPARENT_HUGEPAGE)
+ int dax_pmd_fault(struct vm_area_struct *, unsigned long addr, pmd_t *,
+ 				unsigned int flags, get_block_t);
+ int __dax_pmd_fault(struct vm_area_struct *, unsigned long addr, pmd_t *,
+-- 
+2.17.1
+

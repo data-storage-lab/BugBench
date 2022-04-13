@@ -1,0 +1,37 @@
+From 4ca8b57a0af145f4e791f21dbca6ad789da9ee8b Mon Sep 17 00:00:00 2001
+From: Axel Lin <axel.lin@ingics.com>
+Date: Wed, 16 Sep 2015 21:25:38 +0800
+Subject: [PATCH 510463/911378] libnvdimm: pfn_devs: Fix locking in
+ namespace_store
+
+Always take device_lock() before nvdimm_bus_lock() to prevent deadlock.
+
+Signed-off-by: Axel Lin <axel.lin@ingics.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pfn_devs.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 3fd7d0d81a47..71805a1aa0f3 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -148,13 +148,13 @@ static ssize_t namespace_store(struct device *dev,
+ 	struct nd_pfn *nd_pfn = to_nd_pfn(dev);
+ 	ssize_t rc;
+ 
+-	nvdimm_bus_lock(dev);
+ 	device_lock(dev);
++	nvdimm_bus_lock(dev);
+ 	rc = nd_namespace_store(dev, &nd_pfn->ndns, buf, len);
+ 	dev_dbg(dev, "%s: result: %zd wrote: %s%s", __func__,
+ 			rc, buf, buf[len - 1] == '\n' ? "" : "\n");
+-	device_unlock(dev);
+ 	nvdimm_bus_unlock(dev);
++	device_unlock(dev);
+ 
+ 	return rc;
+ }
+-- 
+2.17.1
+

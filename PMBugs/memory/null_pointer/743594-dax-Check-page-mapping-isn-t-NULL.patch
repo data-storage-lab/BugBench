@@ -1,0 +1,36 @@
+From c93db7bb6ef3251e0ea48ade311d3e9942748e1c Mon Sep 17 00:00:00 2001
+From: Matthew Wilcox <willy@infradead.org>
+Date: Tue, 27 Nov 2018 13:16:33 -0800
+Subject: [PATCH 743594/911378] dax: Check page->mapping isn't NULL
+
+If we race with inode destroy, it's possible for page->mapping to be
+NULL before we even enter this routine, as well as after having slept
+waiting for the dax entry to become unlocked.
+
+Fixes: c2a7d2a11552 ("filesystem-dax: Introduce dax_lock_mapping_entry()")
+Cc: <stable@vger.kernel.org>
+Reported-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Matthew Wilcox <willy@infradead.org>
+Reviewed-by: Johannes Thumshirn <jthumshirn@suse.de>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ fs/dax.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 9bcce89ea18e..e69fc231833b 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -365,7 +365,7 @@ bool dax_lock_mapping_entry(struct page *page)
+ 		struct address_space *mapping = READ_ONCE(page->mapping);
+ 
+ 		locked = false;
+-		if (!dax_mapping(mapping))
++		if (!mapping || !dax_mapping(mapping))
+ 			break;
+ 
+ 		/*
+-- 
+2.17.1
+

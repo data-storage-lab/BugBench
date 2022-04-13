@@ -1,0 +1,49 @@
+From 589e75d15702dc720b363a92f984876704864946 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sat, 24 Oct 2015 19:55:58 -0700
+Subject: [PATCH 522268/911378] libnvdimm, pmem: fix size trim in
+ pmem_direct_access()
+
+This masking prevents access to the end of the device via dax_do_io(),
+and is unnecessary as arch_add_memory() would have rejected an unaligned
+allocation.
+
+Cc: <stable@vger.kernel.org>
+Cc: Ross Zwisler <ross.zwisler@linux.intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pmem.c | 15 ++-------------
+ 1 file changed, 2 insertions(+), 13 deletions(-)
+
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index 012e0649f1ac..8ee79893d2f5 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -105,22 +105,11 @@ static long pmem_direct_access(struct block_device *bdev, sector_t sector,
+ {
+ 	struct pmem_device *pmem = bdev->bd_disk->private_data;
+ 	resource_size_t offset = sector * 512 + pmem->data_offset;
+-	resource_size_t size;
+-
+-	if (pmem->data_offset) {
+-		/*
+-		 * Limit the direct_access() size to what is covered by
+-		 * the memmap
+-		 */
+-		size = (pmem->size - offset) & ~ND_PFN_MASK;
+-	} else
+-		size = pmem->size - offset;
+-
+-	/* FIXME convert DAX to comprehend that this mapping has a lifetime */
++
+ 	*kaddr = pmem->virt_addr + offset;
+ 	*pfn = (pmem->phys_addr + offset) >> PAGE_SHIFT;
+ 
+-	return size;
++	return pmem->size - offset;
+ }
+ 
+ static const struct block_device_operations pmem_fops = {
+-- 
+2.17.1
+

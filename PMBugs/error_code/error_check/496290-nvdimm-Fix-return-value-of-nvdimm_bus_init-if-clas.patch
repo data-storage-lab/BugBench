@@ -1,0 +1,33 @@
+From daa1dee405d7d3d3e816b84a692e838a5647a02a Mon Sep 17 00:00:00 2001
+From: Axel Lin <axel.lin@ingics.com>
+Date: Sun, 28 Jun 2015 17:00:57 +0800
+Subject: [PATCH 496290/911378] nvdimm: Fix return value of nvdimm_bus_init()
+ if class_create() fails
+
+Return proper error if class_create() fails.
+
+Signed-off-by: Axel Lin <axel.lin@ingics.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/bus.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/bus.c b/drivers/nvdimm/bus.c
+index 73442bd824a7..7e2c43f701bc 100644
+--- a/drivers/nvdimm/bus.c
++++ b/drivers/nvdimm/bus.c
+@@ -699,8 +699,10 @@ int __init nvdimm_bus_init(void)
+ 	nvdimm_major = rc;
+ 
+ 	nd_class = class_create(THIS_MODULE, "nd");
+-	if (IS_ERR(nd_class))
++	if (IS_ERR(nd_class)) {
++		rc = PTR_ERR(nd_class);
+ 		goto err_class;
++	}
+ 
+ 	return 0;
+ 
+-- 
+2.17.1
+

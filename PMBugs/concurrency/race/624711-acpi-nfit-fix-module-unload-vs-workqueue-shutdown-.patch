@@ -1,0 +1,195 @@
+From fbabd829fe76a72a6444f64361cf8b2a9848639d Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Tue, 18 Apr 2017 09:56:31 -0700
+Subject: [PATCH 624711/911378] acpi, nfit: fix module unload vs workqueue
+ shutdown race
+
+The workqueue may still be running when the devres callbacks start
+firing to deallocate an acpi_nfit_desc instance. Stop and flush the
+workqueue before letting any other devres de-allocations proceed.
+
+Reported-by: Linda Knippers <linda.knippers@hpe.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/acpi/nfit/core.c         | 76 +++++++++++++++++++-------------
+ drivers/acpi/nfit/nfit.h         |  1 +
+ tools/testing/nvdimm/test/nfit.c |  4 ++
+ 3 files changed, 51 insertions(+), 30 deletions(-)
+
+diff --git a/drivers/acpi/nfit/core.c b/drivers/acpi/nfit/core.c
+index 69c6cc77130c..261eea1d2906 100644
+--- a/drivers/acpi/nfit/core.c
++++ b/drivers/acpi/nfit/core.c
+@@ -2604,7 +2604,8 @@ static int acpi_nfit_register_regions(struct acpi_nfit_desc *acpi_desc)
+ 				return rc;
+ 		}
+ 
+-	queue_work(nfit_wq, &acpi_desc->work);
++	if (!acpi_desc->cancel)
++		queue_work(nfit_wq, &acpi_desc->work);
+ 	return 0;
+ }
+ 
+@@ -2650,32 +2651,11 @@ static int acpi_nfit_desc_init_scrub_attr(struct acpi_nfit_desc *acpi_desc)
+ 	return 0;
+ }
+ 
+-static void acpi_nfit_destruct(void *data)
++static void acpi_nfit_unregister(void *data)
+ {
+ 	struct acpi_nfit_desc *acpi_desc = data;
+-	struct device *bus_dev = to_nvdimm_bus_dev(acpi_desc->nvdimm_bus);
+ 
+-	/*
+-	 * Destruct under acpi_desc_lock so that nfit_handle_mce does not
+-	 * race teardown
+-	 */
+-	mutex_lock(&acpi_desc_lock);
+-	acpi_desc->cancel = 1;
+-	/*
+-	 * Bounce the nvdimm bus lock to make sure any in-flight
+-	 * acpi_nfit_ars_rescan() submissions have had a chance to
+-	 * either submit or see ->cancel set.
+-	 */
+-	device_lock(bus_dev);
+-	device_unlock(bus_dev);
+-
+-	flush_workqueue(nfit_wq);
+-	if (acpi_desc->scrub_count_state)
+-		sysfs_put(acpi_desc->scrub_count_state);
+ 	nvdimm_bus_unregister(acpi_desc->nvdimm_bus);
+-	acpi_desc->nvdimm_bus = NULL;
+-	list_del(&acpi_desc->list);
+-	mutex_unlock(&acpi_desc_lock);
+ }
+ 
+ int acpi_nfit_init(struct acpi_nfit_desc *acpi_desc, void *data, acpi_size sz)
+@@ -2693,7 +2673,7 @@ int acpi_nfit_init(struct acpi_nfit_desc *acpi_desc, void *data, acpi_size sz)
+ 		if (!acpi_desc->nvdimm_bus)
+ 			return -ENOMEM;
+ 
+-		rc = devm_add_action_or_reset(dev, acpi_nfit_destruct,
++		rc = devm_add_action_or_reset(dev, acpi_nfit_unregister,
+ 				acpi_desc);
+ 		if (rc)
+ 			return rc;
+@@ -2787,9 +2767,10 @@ static int acpi_nfit_flush_probe(struct nvdimm_bus_descriptor *nd_desc)
+ 
+ 	/* bounce the init_mutex to make init_complete valid */
+ 	mutex_lock(&acpi_desc->init_mutex);
+-	mutex_unlock(&acpi_desc->init_mutex);
+-	if (acpi_desc->init_complete)
++	if (acpi_desc->cancel || acpi_desc->init_complete) {
++		mutex_unlock(&acpi_desc->init_mutex);
+ 		return 0;
++	}
+ 
+ 	/*
+ 	 * Scrub work could take 10s of seconds, userspace may give up so we
+@@ -2798,6 +2779,7 @@ static int acpi_nfit_flush_probe(struct nvdimm_bus_descriptor *nd_desc)
+ 	INIT_WORK_ONSTACK(&flush.work, flush_probe);
+ 	COMPLETION_INITIALIZER_ONSTACK(flush.cmp);
+ 	queue_work(nfit_wq, &flush.work);
++	mutex_unlock(&acpi_desc->init_mutex);
+ 
+ 	rc = wait_for_completion_interruptible(&flush.cmp);
+ 	cancel_work_sync(&flush.work);
+@@ -2834,10 +2816,12 @@ int acpi_nfit_ars_rescan(struct acpi_nfit_desc *acpi_desc)
+ 	if (work_busy(&acpi_desc->work))
+ 		return -EBUSY;
+ 
+-	if (acpi_desc->cancel)
++	mutex_lock(&acpi_desc->init_mutex);
++	if (acpi_desc->cancel) {
++		mutex_unlock(&acpi_desc->init_mutex);
+ 		return 0;
++	}
+ 
+-	mutex_lock(&acpi_desc->init_mutex);
+ 	list_for_each_entry(nfit_spa, &acpi_desc->spas, list) {
+ 		struct acpi_nfit_system_address *spa = nfit_spa->spa;
+ 
+@@ -2886,6 +2870,35 @@ static void acpi_nfit_put_table(void *table)
+ 	acpi_put_table(table);
+ }
+ 
++void acpi_nfit_shutdown(void *data)
++{
++	struct acpi_nfit_desc *acpi_desc = data;
++	struct device *bus_dev = to_nvdimm_bus_dev(acpi_desc->nvdimm_bus);
++
++	/*
++	 * Destruct under acpi_desc_lock so that nfit_handle_mce does not
++	 * race teardown
++	 */
++	mutex_lock(&acpi_desc_lock);
++	list_del(&acpi_desc->list);
++	mutex_unlock(&acpi_desc_lock);
++
++	mutex_lock(&acpi_desc->init_mutex);
++	acpi_desc->cancel = 1;
++	mutex_unlock(&acpi_desc->init_mutex);
++
++	/*
++	 * Bounce the nvdimm bus lock to make sure any in-flight
++	 * acpi_nfit_ars_rescan() submissions have had a chance to
++	 * either submit or see ->cancel set.
++	 */
++	device_lock(bus_dev);
++	device_unlock(bus_dev);
++
++	flush_workqueue(nfit_wq);
++}
++EXPORT_SYMBOL_GPL(acpi_nfit_shutdown);
++
+ static int acpi_nfit_add(struct acpi_device *adev)
+ {
+ 	struct acpi_buffer buf = { ACPI_ALLOCATE_BUFFER, NULL };
+@@ -2933,12 +2946,15 @@ static int acpi_nfit_add(struct acpi_device *adev)
+ 		rc = acpi_nfit_init(acpi_desc, (void *) tbl
+ 				+ sizeof(struct acpi_table_nfit),
+ 				sz - sizeof(struct acpi_table_nfit));
+-	return rc;
++
++	if (rc)
++		return rc;
++	return devm_add_action_or_reset(dev, acpi_nfit_shutdown, acpi_desc);
+ }
+ 
+ static int acpi_nfit_remove(struct acpi_device *adev)
+ {
+-	/* see acpi_nfit_destruct */
++	/* see acpi_nfit_unregister */
+ 	return 0;
+ }
+ 
+diff --git a/drivers/acpi/nfit/nfit.h b/drivers/acpi/nfit/nfit.h
+index fac098bfa585..58fb7d68e04a 100644
+--- a/drivers/acpi/nfit/nfit.h
++++ b/drivers/acpi/nfit/nfit.h
+@@ -239,6 +239,7 @@ static inline struct acpi_nfit_desc *to_acpi_desc(
+ 
+ const u8 *to_nfit_uuid(enum nfit_uuids id);
+ int acpi_nfit_init(struct acpi_nfit_desc *acpi_desc, void *nfit, acpi_size sz);
++void acpi_nfit_shutdown(void *data);
+ void __acpi_nfit_notify(struct device *dev, acpi_handle handle, u32 event);
+ void __acpi_nvdimm_notify(struct device *dev, u32 event);
+ int acpi_nfit_ctl(struct nvdimm_bus_descriptor *nd_desc, struct nvdimm *nvdimm,
+diff --git a/tools/testing/nvdimm/test/nfit.c b/tools/testing/nvdimm/test/nfit.c
+index d7fb1b894128..c2187178fb13 100644
+--- a/tools/testing/nvdimm/test/nfit.c
++++ b/tools/testing/nvdimm/test/nfit.c
+@@ -1851,6 +1851,10 @@ static int nfit_test_probe(struct platform_device *pdev)
+ 	if (rc)
+ 		return rc;
+ 
++	rc = devm_add_action_or_reset(&pdev->dev, acpi_nfit_shutdown, acpi_desc);
++	if (rc)
++		return rc;
++
+ 	if (nfit_test->setup != nfit_test0_setup)
+ 		return 0;
+ 
+-- 
+2.17.1
+

@@ -1,0 +1,88 @@
+From 03cdadb04077b9311bbc67d98cc5401aff76482d Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Fri, 26 Feb 2016 15:19:43 -0800
+Subject: [PATCH 542741/911378] block: disable block device DAX by default
+
+The recent *sync enabling discovered that we are inserting into the
+block_device pagecache counter to the expectations of the dirty data
+tracking for dax mappings.  This can lead to data corruption.
+
+We want to support DAX for block devices eventually, but it requires
+wider changes to properly manage the pagecache.
+
+   dump_stack+0x85/0xc2
+   dax_writeback_mapping_range+0x60/0xe0
+   blkdev_writepages+0x3f/0x50
+   do_writepages+0x21/0x30
+   __filemap_fdatawrite_range+0xc6/0x100
+   filemap_write_and_wait+0x4a/0xa0
+   set_blocksize+0x70/0xd0
+   sb_set_blocksize+0x1d/0x50
+   ext4_fill_super+0x75b/0x3360
+   mount_bdev+0x180/0x1b0
+   ext4_mount+0x15/0x20
+   mount_fs+0x38/0x170
+
+Mark the support broken so its disabled by default, but otherwise still
+available for testing.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Reported-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Suggested-by: Dave Chinner <david@fromorbit.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Cc: Jens Axboe <axboe@fb.com>
+Cc: Matthew Wilcox <matthew.r.wilcox@intel.com>
+Cc: Al Viro <viro@ftp.linux.org.uk>
+Cc: Theodore Ts'o <tytso@mit.edu>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ block/Kconfig  | 13 +++++++++++++
+ fs/block_dev.c |  6 +++++-
+ 2 files changed, 18 insertions(+), 1 deletion(-)
+
+diff --git a/block/Kconfig b/block/Kconfig
+index 161491d0a879..0363cd731320 100644
+--- a/block/Kconfig
++++ b/block/Kconfig
+@@ -88,6 +88,19 @@ config BLK_DEV_INTEGRITY
+ 	T10/SCSI Data Integrity Field or the T13/ATA External Path
+ 	Protection.  If in doubt, say N.
+ 
++config BLK_DEV_DAX
++	bool "Block device DAX support"
++	depends on FS_DAX
++	depends on BROKEN
++	help
++	  When DAX support is available (CONFIG_FS_DAX) raw block
++	  devices can also support direct userspace access to the
++	  storage capacity via MMAP(2) similar to a file on a
++	  DAX-enabled filesystem.  However, the DAX I/O-path disables
++	  some standard I/O-statistics, and the MMAP(2) path has some
++	  operational differences due to bypassing the page
++	  cache.  If in doubt, say N.
++
+ config BLK_DEV_THROTTLING
+ 	bool "Block layer bio throttling support"
+ 	depends on BLK_CGROUP=y
+diff --git a/fs/block_dev.c b/fs/block_dev.c
+index 39b3a174a425..31c6d1090f11 100644
+--- a/fs/block_dev.c
++++ b/fs/block_dev.c
+@@ -1201,7 +1201,11 @@ static int __blkdev_get(struct block_device *bdev, fmode_t mode, int for_part)
+ 		bdev->bd_disk = disk;
+ 		bdev->bd_queue = disk->queue;
+ 		bdev->bd_contains = bdev;
+-		bdev->bd_inode->i_flags = disk->fops->direct_access ? S_DAX : 0;
++		if (IS_ENABLED(CONFIG_BLK_DEV_DAX) && disk->fops->direct_access)
++			bdev->bd_inode->i_flags = S_DAX;
++		else
++			bdev->bd_inode->i_flags = 0;
++
+ 		if (!partno) {
+ 			ret = -ENXIO;
+ 			bdev->bd_part = disk_get_part(disk, partno);
+-- 
+2.17.1
+

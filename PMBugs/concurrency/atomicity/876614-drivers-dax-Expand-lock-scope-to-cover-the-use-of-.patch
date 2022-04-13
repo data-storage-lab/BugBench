@@ -1,0 +1,48 @@
+From eedfd73d401b5584ab270b5f9f80079e56c7807e Mon Sep 17 00:00:00 2001
+From: Ira Weiny <ira.weiny@intel.com>
+Date: Fri, 17 Jul 2020 00:20:50 -0700
+Subject: [PATCH 876614/911378] drivers/dax: Expand lock scope to cover the use
+ of addresses
+
+The addition of PKS protection to dax read lock/unlock will require that
+the address returned by dax_direct_access() be protected by this lock.
+
+Correct the locking by ensuring that the use of kaddr and end_kaddr
+are covered by the dax read lock/unlock.
+
+Link: https://lore.kernel.org/r/20200717072056.73134-12-ira.weiny@intel.com
+Reviewed-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Ira Weiny <ira.weiny@intel.com>
+Signed-off-by: Vishal Verma <vishal.l.verma@intel.com>
+---
+ drivers/dax/super.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/dax/super.c b/drivers/dax/super.c
+index de0d02ec0347..ec62752215e4 100644
+--- a/drivers/dax/super.c
++++ b/drivers/dax/super.c
+@@ -103,11 +103,11 @@ bool __generic_fsdax_supported(struct dax_device *dax_dev,
+ 	id = dax_read_lock();
+ 	len = dax_direct_access(dax_dev, pgoff, 1, &kaddr, &pfn);
+ 	len2 = dax_direct_access(dax_dev, pgoff_end, 1, &end_kaddr, &end_pfn);
+-	dax_read_unlock(id);
+ 
+ 	if (len < 1 || len2 < 1) {
+ 		pr_info("%s: error: dax access failed (%ld)\n",
+ 				bdevname(bdev, buf), len < 1 ? len : len2);
++		dax_read_unlock(id);
+ 		return false;
+ 	}
+ 
+@@ -137,6 +137,7 @@ bool __generic_fsdax_supported(struct dax_device *dax_dev,
+ 		put_dev_pagemap(end_pgmap);
+ 
+ 	}
++	dax_read_unlock(id);
+ 
+ 	if (!dax_enabled) {
+ 		pr_info("%s: error: dax support not enabled\n",
+-- 
+2.17.1
+

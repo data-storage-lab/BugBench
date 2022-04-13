@@ -1,0 +1,52 @@
+From 15256f6cc4b44f2e70503758150267fd2a53c0d6 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Tue, 26 Jun 2018 16:30:40 -0600
+Subject: [PATCH 713012/911378] dax: check for QUEUE_FLAG_DAX in
+ bdev_dax_supported()
+
+Add an explicit check for QUEUE_FLAG_DAX to __bdev_dax_supported().  This
+is needed for DM configurations where the first element in the dm-linear or
+dm-stripe target supports DAX, but other elements do not.  Without this
+check __bdev_dax_supported() will pass for such devices, letting a
+filesystem on that device mount with the DAX option.
+
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Suggested-by: Mike Snitzer <snitzer@redhat.com>
+Fixes: commit 545ed20e6df6 ("dm: add infrastructure for DAX support")
+Cc: stable@vger.kernel.org
+Acked-by: Dan Williams <dan.j.williams@intel.com>
+Reviewed-by: Toshi Kani <toshi.kani@hpe.com>
+Signed-off-by: Mike Snitzer <snitzer@redhat.com>
+---
+ drivers/dax/super.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/drivers/dax/super.c b/drivers/dax/super.c
+index 903d9c473749..45276abf03aa 100644
+--- a/drivers/dax/super.c
++++ b/drivers/dax/super.c
+@@ -86,6 +86,7 @@ bool __bdev_dax_supported(struct block_device *bdev, int blocksize)
+ {
+ 	struct dax_device *dax_dev;
+ 	bool dax_enabled = false;
++	struct request_queue *q;
+ 	pgoff_t pgoff;
+ 	int err, id;
+ 	void *kaddr;
+@@ -99,6 +100,13 @@ bool __bdev_dax_supported(struct block_device *bdev, int blocksize)
+ 		return false;
+ 	}
+ 
++	q = bdev_get_queue(bdev);
++	if (!q || !blk_queue_dax(q)) {
++		pr_debug("%s: error: request queue doesn't support dax\n",
++				bdevname(bdev, buf));
++		return false;
++	}
++
+ 	err = bdev_dax_pgoff(bdev, 0, PAGE_SIZE, &pgoff);
+ 	if (err) {
+ 		pr_debug("%s: error: unaligned partition for dax\n",
+-- 
+2.17.1
+

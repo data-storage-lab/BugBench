@@ -1,0 +1,102 @@
+From 03dca343afe080968d90c4d9196404b5bbbc8461 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sat, 21 May 2016 12:22:41 -0700
+Subject: [PATCH 560380/911378] libnvdimm, dax: fix deletion
+
+The ndctl unit tests discovered that the dax enabling omitted updates to
+nd_detach_and_reset().  This routine clears device the configuration
+when the namespace is detached.  Without this clearing userspace may
+assume that the device is in the process of being configured by another
+agent in the system.
+
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/claim.c    | 23 +++++++++++++++++++++--
+ drivers/nvdimm/nd-core.h  |  1 +
+ drivers/nvdimm/pfn_devs.c | 19 -------------------
+ 3 files changed, 22 insertions(+), 21 deletions(-)
+
+diff --git a/drivers/nvdimm/claim.c b/drivers/nvdimm/claim.c
+index 5f53db59a058..8b2e3c4fb0ad 100644
+--- a/drivers/nvdimm/claim.c
++++ b/drivers/nvdimm/claim.c
+@@ -93,6 +93,25 @@ static bool is_idle(struct device *dev, struct nd_namespace_common *ndns)
+ 	return true;
+ }
+ 
++struct nd_pfn *to_nd_pfn_safe(struct device *dev)
++{
++	/*
++	 * pfn device attributes are re-used by dax device instances, so we
++	 * need to be careful to correct device-to-nd_pfn conversion.
++	 */
++	if (is_nd_pfn(dev))
++		return to_nd_pfn(dev);
++
++	if (is_nd_dax(dev)) {
++		struct nd_dax *nd_dax = to_nd_dax(dev);
++
++		return &nd_dax->nd_pfn;
++	}
++
++	WARN_ON(1);
++	return NULL;
++}
++
+ static void nd_detach_and_reset(struct device *dev,
+ 		struct nd_namespace_common **_ndns)
+ {
+@@ -106,8 +125,8 @@ static void nd_detach_and_reset(struct device *dev,
+ 		nd_btt->lbasize = 0;
+ 		kfree(nd_btt->uuid);
+ 		nd_btt->uuid = NULL;
+-	} else if (is_nd_pfn(dev)) {
+-		struct nd_pfn *nd_pfn = to_nd_pfn(dev);
++	} else if (is_nd_pfn(dev) || is_nd_dax(dev)) {
++		struct nd_pfn *nd_pfn = to_nd_pfn_safe(dev);
+ 
+ 		kfree(nd_pfn->uuid);
+ 		nd_pfn->uuid = NULL;
+diff --git a/drivers/nvdimm/nd-core.h b/drivers/nvdimm/nd-core.h
+index 4136c1a82539..6c42eda025f9 100644
+--- a/drivers/nvdimm/nd-core.h
++++ b/drivers/nvdimm/nd-core.h
+@@ -94,4 +94,5 @@ bool __nd_attach_ndns(struct device *dev, struct nd_namespace_common *attach,
+ ssize_t nd_namespace_store(struct device *dev,
+ 		struct nd_namespace_common **_ndns, const char *buf,
+ 		size_t len);
++struct nd_pfn *to_nd_pfn_safe(struct device *dev);
+ #endif /* __ND_CORE_H__ */
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 04f71d6d304d..436191c47077 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -54,25 +54,6 @@ struct nd_pfn *to_nd_pfn(struct device *dev)
+ }
+ EXPORT_SYMBOL(to_nd_pfn);
+ 
+-static struct nd_pfn *to_nd_pfn_safe(struct device *dev)
+-{
+-	/*
+-	 * pfn device attributes are re-used by dax device instances, so we
+-	 * need to be careful to correct device-to-nd_pfn conversion.
+-	 */
+-	if (is_nd_pfn(dev))
+-		return to_nd_pfn(dev);
+-
+-	if (is_nd_dax(dev)) {
+-		struct nd_dax *nd_dax = to_nd_dax(dev);
+-
+-		return &nd_dax->nd_pfn;
+-	}
+-
+-	WARN_ON(1);
+-	return NULL;
+-}
+-
+ static ssize_t mode_show(struct device *dev,
+ 		struct device_attribute *attr, char *buf)
+ {
+-- 
+2.17.1
+

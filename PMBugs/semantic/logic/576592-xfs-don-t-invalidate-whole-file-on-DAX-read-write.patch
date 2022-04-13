@@ -1,0 +1,53 @@
+From 8b2180b3bf0338625cab07da6543acb436df9c40 Mon Sep 17 00:00:00 2001
+From: Dave Chinner <dchinner@redhat.com>
+Date: Wed, 17 Aug 2016 08:31:33 +1000
+Subject: [PATCH 576592/911378] xfs: don't invalidate whole file on DAX
+ read/write
+
+When we do DAX IO, we try to invalidate the entire page cache held
+on the file. This is incorrect as it will trash the entire mapping
+tree that now tracks dirty state in exceptional entries in the radix
+tree slots.
+
+What we are trying to do is remove cached pages (e.g from reads
+into holes) that sit in the radix tree over the range we are about
+to write to. Hence we should just limit the invalidation to the
+range we are about to overwrite.
+
+Reported-by: Jan Kara <jack@suse.cz>
+Signed-off-by: Dave Chinner <dchinner@redhat.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ fs/xfs/xfs_file.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/fs/xfs/xfs_file.c b/fs/xfs/xfs_file.c
+index ed95e5bb04e6..e612a0233710 100644
+--- a/fs/xfs/xfs_file.c
++++ b/fs/xfs/xfs_file.c
+@@ -741,9 +741,20 @@ xfs_file_dax_write(
+ 	 * page is inserted into the pagecache when we have to serve a write
+ 	 * fault on a hole.  It should never be dirtied and can simply be
+ 	 * dropped from the pagecache once we get real data for the page.
++	 *
++	 * XXX: This is racy against mmap, and there's nothing we can do about
++	 * it. dax_do_io() should really do this invalidation internally as
++	 * it will know if we've allocated over a holei for this specific IO and
++	 * if so it needs to update the mapping tree and invalidate existing
++	 * PTEs over the newly allocated range. Remove this invalidation when
++	 * dax_do_io() is fixed up.
+ 	 */
+ 	if (mapping->nrpages) {
+-		ret = invalidate_inode_pages2(mapping);
++		loff_t end = iocb->ki_pos + iov_iter_count(from) - 1;
++
++		ret = invalidate_inode_pages2_range(mapping,
++						    iocb->ki_pos >> PAGE_SHIFT,
++						    end >> PAGE_SHIFT);
+ 		WARN_ON_ONCE(ret);
+ 	}
+ 
+-- 
+2.17.1
+

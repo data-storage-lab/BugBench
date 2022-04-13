@@ -1,0 +1,55 @@
+From 9c5a05bc350c29285a89d6e1f3b68c8c7f308207 Mon Sep 17 00:00:00 2001
+From: Ross Zwisler <ross.zwisler@linux.intel.com>
+Date: Fri, 5 Feb 2016 15:36:08 -0800
+Subject: [PATCH 536949/911378] block: fix pfn_mkwrite() DAX fault handler
+
+Previously the pfn_mkwrite() fault handler for raw block devices called
+bldev_dax_fault() -> __dax_fault() to do a full DAX page fault.
+
+Really what the pfn_mkwrite() fault handler needs to do is call
+dax_pfn_mkwrite() to make sure that the radix tree entry for the given
+PTE is marked as dirty so that a follow-up fsync or msync call will
+flush it durably to media.
+
+Fixes: 5a023cdba50c ("block: enable dax for raw block devices")
+Signed-off-by: Ross Zwisler <ross.zwisler@linux.intel.com>
+Cc: Alexander Viro <viro@zeniv.linux.org.uk>
+Cc: Dan Williams <dan.j.williams@intel.com>
+Cc: Dave Chinner <david@fromorbit.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+Cc: Matthew Wilcox <willy@linux.intel.com>
+Signed-off-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Linus Torvalds <torvalds@linux-foundation.org>
+---
+ fs/block_dev.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/fs/block_dev.c b/fs/block_dev.c
+index afb437484362..39b3a174a425 100644
+--- a/fs/block_dev.c
++++ b/fs/block_dev.c
+@@ -1730,6 +1730,12 @@ static int blkdev_dax_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+ 	return __dax_fault(vma, vmf, blkdev_get_block, NULL);
+ }
+ 
++static int blkdev_dax_pfn_mkwrite(struct vm_area_struct *vma,
++		struct vm_fault *vmf)
++{
++	return dax_pfn_mkwrite(vma, vmf);
++}
++
+ static int blkdev_dax_pmd_fault(struct vm_area_struct *vma, unsigned long addr,
+ 		pmd_t *pmd, unsigned int flags)
+ {
+@@ -1739,7 +1745,7 @@ static int blkdev_dax_pmd_fault(struct vm_area_struct *vma, unsigned long addr,
+ static const struct vm_operations_struct blkdev_dax_vm_ops = {
+ 	.fault		= blkdev_dax_fault,
+ 	.pmd_fault	= blkdev_dax_pmd_fault,
+-	.pfn_mkwrite	= blkdev_dax_fault,
++	.pfn_mkwrite	= blkdev_dax_pfn_mkwrite,
+ };
+ 
+ static const struct vm_operations_struct blkdev_default_vm_ops = {
+-- 
+2.17.1
+

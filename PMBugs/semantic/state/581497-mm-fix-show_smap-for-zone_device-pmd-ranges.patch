@@ -1,0 +1,78 @@
+From ca120cf688874f4423e579e7cc5ddf7244aeca45 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Sat, 3 Sep 2016 10:38:03 -0700
+Subject: [PATCH 581497/911378] mm: fix show_smap() for zone_device-pmd ranges
+
+Attempting to dump /proc/<pid>/smaps for a process with pmd dax mappings
+currently results in the following VM_BUG_ONs:
+
+ kernel BUG at mm/huge_memory.c:1105!
+ task: ffff88045f16b140 task.stack: ffff88045be14000
+ RIP: 0010:[<ffffffff81268f9b>]  [<ffffffff81268f9b>] follow_trans_huge_pmd+0x2cb/0x340
+ [..]
+ Call Trace:
+  [<ffffffff81306030>] smaps_pte_range+0xa0/0x4b0
+  [<ffffffff814c2755>] ? vsnprintf+0x255/0x4c0
+  [<ffffffff8123c46e>] __walk_page_range+0x1fe/0x4d0
+  [<ffffffff8123c8a2>] walk_page_vma+0x62/0x80
+  [<ffffffff81307656>] show_smap+0xa6/0x2b0
+
+ kernel BUG at fs/proc/task_mmu.c:585!
+ RIP: 0010:[<ffffffff81306469>]  [<ffffffff81306469>] smaps_pte_range+0x499/0x4b0
+ Call Trace:
+  [<ffffffff814c2795>] ? vsnprintf+0x255/0x4c0
+  [<ffffffff8123c46e>] __walk_page_range+0x1fe/0x4d0
+  [<ffffffff8123c8a2>] walk_page_vma+0x62/0x80
+  [<ffffffff81307696>] show_smap+0xa6/0x2b0
+
+These locations are sanity checking page flags that must be set for an
+anonymous transparent huge page, but are not set for the zone_device
+pages associated with dax mappings.
+
+Cc: Ross Zwisler <ross.zwisler@linux.intel.com>
+Cc: Kirill A. Shutemov <kirill.shutemov@linux.intel.com>
+Acked-by: Andrew Morton <akpm@linux-foundation.org>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ fs/proc/task_mmu.c | 2 ++
+ mm/huge_memory.c   | 4 ++--
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/fs/proc/task_mmu.c b/fs/proc/task_mmu.c
+index 187d84ef9de9..f6fa99eca515 100644
+--- a/fs/proc/task_mmu.c
++++ b/fs/proc/task_mmu.c
+@@ -581,6 +581,8 @@ static void smaps_pmd_entry(pmd_t *pmd, unsigned long addr,
+ 		mss->anonymous_thp += HPAGE_PMD_SIZE;
+ 	else if (PageSwapBacked(page))
+ 		mss->shmem_thp += HPAGE_PMD_SIZE;
++	else if (is_zone_device_page(page))
++		/* pass */;
+ 	else
+ 		VM_BUG_ON_PAGE(1, page);
+ 	smaps_account(mss, page, true, pmd_young(*pmd), pmd_dirty(*pmd));
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 2db2112aa31e..a6abd76baa72 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1078,7 +1078,7 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
+ 		goto out;
+ 
+ 	page = pmd_page(*pmd);
+-	VM_BUG_ON_PAGE(!PageHead(page), page);
++	VM_BUG_ON_PAGE(!PageHead(page) && !is_zone_device_page(page), page);
+ 	if (flags & FOLL_TOUCH)
+ 		touch_pmd(vma, addr, pmd);
+ 	if ((flags & FOLL_MLOCK) && (vma->vm_flags & VM_LOCKED)) {
+@@ -1116,7 +1116,7 @@ struct page *follow_trans_huge_pmd(struct vm_area_struct *vma,
+ 	}
+ skip_mlock:
+ 	page += (addr & ~HPAGE_PMD_MASK) >> PAGE_SHIFT;
+-	VM_BUG_ON_PAGE(!PageCompound(page), page);
++	VM_BUG_ON_PAGE(!PageCompound(page) && !is_zone_device_page(page), page);
+ 	if (flags & FOLL_GET)
+ 		get_page(page);
+ 
+-- 
+2.17.1
+

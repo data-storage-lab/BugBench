@@ -1,0 +1,35 @@
+From 5348deb138abb90ca8f728356772e38abc791cf9 Mon Sep 17 00:00:00 2001
+From: Pankaj Gupta <pagupta@redhat.com>
+Date: Tue, 30 Jul 2019 17:07:08 +0530
+Subject: [PATCH 795458/911378] dm table: fix dax_dev NULL dereference in
+ device_synchronous()
+
+If a device doesn't support DAX its 'dax_dev' is NULL.  Fix
+device_synchronous() to first check if dax_dev is NULL before
+dereferencing it.
+
+Fixes: 2e9ee0955d3c ("dm: enable synchronous dax")
+Reported-by: jencce.kernel@gmail.com
+Signed-off-by: Pankaj Gupta <pagupta@redhat.com>
+Acked-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Mike Snitzer <snitzer@redhat.com>
+---
+ drivers/md/dm-table.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/md/dm-table.c b/drivers/md/dm-table.c
+index caaee8032afe..12857beaa7f9 100644
+--- a/drivers/md/dm-table.c
++++ b/drivers/md/dm-table.c
+@@ -894,7 +894,7 @@ int device_supports_dax(struct dm_target *ti, struct dm_dev *dev,
+ static int device_synchronous(struct dm_target *ti, struct dm_dev *dev,
+ 				       sector_t start, sector_t len, void *data)
+ {
+-	return dax_synchronous(dev->dax_dev);
++	return dev->dax_dev && dax_synchronous(dev->dax_dev);
+ }
+ 
+ bool dm_table_supports_dax(struct dm_table *t,
+-- 
+2.17.1
+

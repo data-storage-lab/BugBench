@@ -1,0 +1,36 @@
+From 97681f9b086ac4009ed914fdc56b0ebbfafe8b3d Mon Sep 17 00:00:00 2001
+From: Toshi Kani <toshi.kani@hpe.com>
+Date: Tue, 25 Apr 2017 15:16:51 -0600
+Subject: [PATCH 626912/911378] libnvdimm: fix phys_addr for
+ nvdimm_clear_poison
+
+nvdimm_clear_poison() expects a physical address, not an offset.
+Fix nsio_rw_bytes() to call nvdimm_clear_poison() with a physical
+address.
+
+Signed-off-by: Toshi Kani <toshi.kani@hpe.com>
+Cc: Dave Jiang <dave.jiang@intel.com>
+Cc: Vishal Verma <vishal.l.verma@intel.com>
+Reviewed-by: Vishal Verma <vishal.l.verma@intel.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/claim.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/nvdimm/claim.c b/drivers/nvdimm/claim.c
+index b3323c0697f6..2c19bc7fc056 100644
+--- a/drivers/nvdimm/claim.c
++++ b/drivers/nvdimm/claim.c
+@@ -246,7 +246,8 @@ static int nsio_rw_bytes(struct nd_namespace_common *ndns,
+ 		if (IS_ALIGNED(offset, 512) && IS_ALIGNED(size, 512)) {
+ 			long cleared;
+ 
+-			cleared = nvdimm_clear_poison(&ndns->dev, offset, size);
++			cleared = nvdimm_clear_poison(&ndns->dev,
++					nsio->res.start + offset, size);
+ 			if (cleared < size)
+ 				rc = -EIO;
+ 			if (cleared > 0 && cleared / 512) {
+-- 
+2.17.1
+

@@ -1,0 +1,33 @@
+From 45eb570a0db3391c88cba04510a20fe7e4125497 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Fri, 29 Jan 2016 17:42:51 -0800
+Subject: [PATCH 535814/911378] libnvdimm, pfn: fix restoring memmap location
+
+This path was missed when turning on the memmap in pmem support.  Permit
+'pmem' as a valid location for the map.
+
+Reported-by: Jeff Moyer <jmoyer@redhat.com>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/pfn_devs.c | 4 +---
+ 1 file changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/drivers/nvdimm/pfn_devs.c b/drivers/nvdimm/pfn_devs.c
+index 0cc9048b86e2..ae81a2f1da50 100644
+--- a/drivers/nvdimm/pfn_devs.c
++++ b/drivers/nvdimm/pfn_devs.c
+@@ -301,10 +301,8 @@ int nd_pfn_validate(struct nd_pfn *nd_pfn)
+ 
+ 	switch (le32_to_cpu(pfn_sb->mode)) {
+ 	case PFN_MODE_RAM:
+-		break;
+ 	case PFN_MODE_PMEM:
+-		/* TODO: allocate from PMEM support */
+-		return -ENOTTY;
++		break;
+ 	default:
+ 		return -ENXIO;
+ 	}
+-- 
+2.17.1
+

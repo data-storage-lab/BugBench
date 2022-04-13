@@ -1,0 +1,32 @@
+From 2de5148ffb12ff6b4088125f44818771e78e6830 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Mon, 3 Jul 2017 16:30:44 -0700
+Subject: [PATCH 640211/911378] libnvdimm, namespace: record 'lbasize' for pmem
+ namespaces
+
+Commit f979b13c3cc5 "libnvdimm, label: honor the lba size specified in
+v1.2 labels") neglected to update the 'lbasize' in the label when the
+namespace sector_size attribute was written. We need this value in the
+label for inter-OS / pre-OS compatibility.
+
+Fixes: f979b13c3cc5 ("libnvdimm, label: honor the lba size specified in v1.2 labels")
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/nvdimm/label.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/drivers/nvdimm/label.c b/drivers/nvdimm/label.c
+index 922b68718a1a..87796f840777 100644
+--- a/drivers/nvdimm/label.c
++++ b/drivers/nvdimm/label.c
+@@ -660,6 +660,7 @@ static int __pmem_label_update(struct nd_region *nd_region,
+ 	nd_label->position = __cpu_to_le16(pos);
+ 	nd_label->isetcookie = __cpu_to_le64(cookie);
+ 	nd_label->rawsize = __cpu_to_le64(resource_size(res));
++	nd_label->lbasize = __cpu_to_le64(nspm->lbasize);
+ 	nd_label->dpa = __cpu_to_le64(res->start);
+ 	nd_label->slot = __cpu_to_le32(slot);
+ 	if (namespace_label_has(ndd, type_guid))
+-- 
+2.17.1
+
