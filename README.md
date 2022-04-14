@@ -12,10 +12,9 @@ XXX
 
 ## Benchmarking for Observability ##
 
-The "Observability" folder contains the dataset studied in our paper "[Benchmarking for Observability: The Case of Diagnosing Storage Failures](https://www.ece.iastate.edu/~mai/docs/papers/2021TBench-Debug.pdf)", which was published in BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](https://www.benchcouncil.org/index.html)), 2021.
+The "Benchmarking_bug" file contains the dataset information studied in our paper "[Benchmarking for Observability: The Case of Diagnosing Storage Failures](https://www.ece.iastate.edu/~mai/docs/papers/2021TBench-Debug.pdf)", which was published in BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](https://www.benchcouncil.org/index.html)), 2021.
 
 Our dataset was used to measure the debugging observability of two general debugging tools: FTrace and PANDA.
-The dataset information can be found in the "Benchmarking_bug" file.
 
 Images Link: https://drive.google.com/drive/folders/1rgx6tB4iXAW8oomnIZTHGCeoUPJPup3R?usp=sharing
 
