@@ -1,0 +1,9 @@
+#9-BLK
+    kerenl: 4.19.1-041901-generic buggy kerenl
+    kernel: 4.19.0-patched patched kernel
+    patch link: https://www.spinics.net/lists/stable/msg426462.html
+    run 
+        sudo qemu-system-x86_64 -m 300 -cpu host -smp 1 -drive file=9_blk.qcow2,media=disk,if=ide -machine q35,accel=kvm -vga virtio
+        after go through the system
+            sudo ./test.sh
+
