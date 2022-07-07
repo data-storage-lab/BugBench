@@ -18,6 +18,10 @@ Our dataset was used to measure the debugging observability of two general debug
 
 Images Link: https://drive.google.com/drive/folders/1rgx6tB4iXAW8oomnIZTHGCeoUPJPup3R?usp=sharing
 
+## FSAppBugs ##
+The "FSAppBugs""[On the Reproducibility of Bugs in File-System Aware Storage Applications]()", which was published in the 16th IEEE International Conference On Networking, Architecture, and Storage ([NAS](http://www.nas-conference.org/NAS-2022/)), 2022.
+
+Our dataset analysis was a guide for the application bug detection and debugging.
 
 ## Contact ##
 Om R. Gatla (ogatla@iastate.edu), 
