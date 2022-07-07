@@ -1,0 +1,98 @@
+From 9c5413b1aedd2706c3daff6c051fd3b483e5b62f Mon Sep 17 00:00:00 2001
+From: David Anderson <dvander@google.com>
+Date: Fri, 2 Mar 2018 18:44:14 -0800
+Subject: [PATCH] AOSP: e2fsck: Skip duplicate blocks when
+ RO_COMPAT_SHARED_BLOCKS is set.
+
+If RO_COMPAT_SHARED_BLOCKS is set, the duplicate block pass is skipped
+entirely.
+
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+
+Google-Bug-Id: 64109868
+Test: f_shared_blocks_ok
+Change-Id: I49a9d6c5012d5e76c9a47578a45cae7484df4c4a
+From AOSP commit: 93d12bc16bffd39a56b1e08aefbc641eba298077
+---
+ e2fsck/pass1.c                    |   2 ++
+ tests/f_shared_blocks_ok/expect.1 |   7 +++++++
+ tests/f_shared_blocks_ok/expect.2 |   7 +++++++
+ tests/f_shared_blocks_ok/image.gz | Bin 0 -> 831 bytes
+ tests/f_shared_blocks_ok/name     |   1 +
+ 5 files changed, 17 insertions(+)
+ create mode 100644 tests/f_shared_blocks_ok/expect.1
+ create mode 100644 tests/f_shared_blocks_ok/expect.2
+ create mode 100644 tests/f_shared_blocks_ok/image.gz
+ create mode 100644 tests/f_shared_blocks_ok/name
+
+diff --git a/e2fsck/pass1.c b/e2fsck/pass1.c
+index 69b3f09e..35a05037 100644
+--- a/e2fsck/pass1.c
++++ b/e2fsck/pass1.c
+@@ -2261,6 +2261,8 @@ static _INLINE_ void mark_block_used(e2fsck_t ctx, blk64_t block)
+ 	clear_problem_context(&pctx);
+ 
+ 	if (ext2fs_fast_test_block_bitmap2(ctx->block_found_map, block)) {
++		if (ext2fs_has_feature_shared_blocks(ctx->fs->super))
++			return;
+ 		if (!ctx->block_dup_map) {
+ 			pctx.errcode = e2fsck_allocate_block_bitmap(ctx->fs,
+ 					_("multiply claimed block map"),
+diff --git a/tests/f_shared_blocks_ok/expect.1 b/tests/f_shared_blocks_ok/expect.1
+new file mode 100644
+index 00000000..de4363b9
+--- /dev/null
++++ b/tests/f_shared_blocks_ok/expect.1
+@@ -0,0 +1,7 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++test_filesys: 13/32 files (0.0% non-contiguous), 12/64 blocks
++Exit status is 0
+diff --git a/tests/f_shared_blocks_ok/expect.2 b/tests/f_shared_blocks_ok/expect.2
+new file mode 100644
+index 00000000..de4363b9
+--- /dev/null
++++ b/tests/f_shared_blocks_ok/expect.2
+@@ -0,0 +1,7 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++test_filesys: 13/32 files (0.0% non-contiguous), 12/64 blocks
++Exit status is 0
+diff --git a/tests/f_shared_blocks_ok/image.gz b/tests/f_shared_blocks_ok/image.gz
+new file mode 100644
+index 0000000000000000000000000000000000000000..db747e271b5061aeee340c38a570958a2cc75e0a
+GIT binary patch
+literal 831
+zcmb2|=HOsuofXBvoSB=Lp33m{j&Fx=pbW!@;`=s<Jc}haeTmSl`m|Ai`?0cW<i-mc
+zPmPUcresVy>EU@Z!80W>v0syWVnjr;qLAjz6HRN6?R*~_e|h#1)8fjy{rCRQEk0lS
+z{NMYxcm2NasjgOJ_`lk#XPtzu;k08f&fM~jY&lpJvgsSAuwF^Kfz6(mwL+8DpDy(b
+z^E<gqx4Te3FXjI&fqC!m7nK}6boH<J^z)JXHzi;CWN5P_F!o->x0ijTug}NFf2c?Z
+z`@i+Nr_HBrIkEXaZx{aY^laW%lrzUt?BoOSJM&DxEO=4Nz;G<Ss`tKNa-PTf|JJXs
+z|GD_rTspn1ZTi)VzjUj<79Fm5BhSFVFyVfIx8;<}LO^Cl)XTsBwoRCFN&4^Cs+A#Y
+zug!lrS1`)kc5nNyXYXIy)+B_lu+_F!_VN4n=Jn0JJ8oUSFFt+wu^kuV@}sA0Wds^f
+z-)=Fze&g43XPbi$^?&}q{q5JE_CVne@4cV@kDjM%IqjPLHu1gYK%oN>9?$<f&%bu%
+z-Iv+_nHd-yijDrWGcYtf`~LS2$W<A6v%kNy4(VL~cIp@TKdaZezUK#u5&}J~4{sU*
+z6*Vji`$CikTn7G$t~xEgYyXjor+Z9vTgq1_rB*HeqnjACcFq3nbskPXcklCjEBw>u
+z)ybWWbK=fwoBf})^yoADpBrxc>CSI8s89-fS7vJQf6|*XziX9$t1D02-T&NY!sUqv
+zlRoqFip;Kmbmhm@<&XWt7k^wXqP2C?#~;Dxl=}bWD#qAuEY6krcWCE~@7_yZ`<1KN
+p%l=n;ex^R_!SO%oNiy=s|AfzbatD{AX)9j8_PmhzN}wGq3;<esMeYCq
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/f_shared_blocks_ok/name b/tests/f_shared_blocks_ok/name
+new file mode 100644
+index 00000000..c77dbbd3
+--- /dev/null
++++ b/tests/f_shared_blocks_ok/name
+@@ -0,0 +1 @@
++clean check for intentionally shared blocks
+-- 
+2.25.1
+

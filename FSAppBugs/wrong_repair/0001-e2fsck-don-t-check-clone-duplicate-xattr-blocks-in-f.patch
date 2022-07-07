@@ -1,0 +1,52 @@
+From 7501ce3ee331b7cdb965ab95036090f2de91b5e0 Mon Sep 17 00:00:00 2001
+From: Eric Sandeen <sandeen@redhat.com>
+Date: Tue, 31 May 2011 19:59:56 -0400
+Subject: [PATCH] e2fsck: don't check/clone duplicate xattr blocks in fs
+ without xattr feature
+
+I had an extremely corrupted customer filesystem which, after thousands
+of lines of e2fsck output, found one more problem on an immediately
+subsequent e2fsck.  In short, a file had had its i_file_acl block
+cloned due to being a duplicate.  That ultimately got cleared
+because the fs did not have the xattr feature, and the inode
+was subsequently removed due to invalid mode.
+
+The 2nd e2fsck pass found the cloned xattr block as in use, but
+not owned by any file, and had to fix up the block bitmaps.
+
+Simply skipping the processing of duplicate xattr blocks on a
+non-xattr filesystem seems reasonable, since they will be cleared
+later in any case.
+
+(also fix existing brace misalignment)
+
+Signed-off-by: Eric Sandeen <sandeen@redhat.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass1b.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/e2fsck/pass1b.c b/e2fsck/pass1b.c
+index 155fcba4..9bef3687 100644
+--- a/e2fsck/pass1b.c
++++ b/e2fsck/pass1b.c
+@@ -310,12 +310,14 @@ static void pass1b(e2fsck_t ctx, char *block_buf)
+ 			pctx.errcode = ext2fs_block_iterate3(fs, ino,
+ 					     BLOCK_FLAG_READ_ONLY, block_buf,
+ 					     process_pass1b_block, &pb);
+-		if (ext2fs_file_acl_block(&inode)) {
++		/* If the feature is not set, attrs will be cleared later anyway */
++		if ((fs->super->s_feature_compat & EXT2_FEATURE_COMPAT_EXT_ATTR) &&
++		    ext2fs_file_acl_block(&inode)) {
+ 			blk64_t blk = ext2fs_file_acl_block(&inode);
+ 			process_pass1b_block(fs, &blk,
+ 					     BLOCK_COUNT_EXTATTR, 0, 0, &pb);
+ 			ext2fs_file_acl_block_set(&inode, blk);
+-			}
++		}
+ 		if (pb.dup_blocks) {
+ 			end_problem_latch(ctx, PR_LATCH_DBLOCK);
+ 			if (ino >= EXT2_FIRST_INODE(fs->super) ||
+-- 
+2.25.1
+

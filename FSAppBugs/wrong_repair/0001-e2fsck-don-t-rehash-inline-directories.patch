@@ -1,0 +1,48 @@
+From 81ac00d08a5d011adaa306699b7409477d4e31a3 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Fri, 14 Mar 2014 09:16:20 -0400
+Subject: [PATCH] e2fsck: don't rehash inline directories
+
+If a directory's contents are stored entirely inside the inode,
+there's no index to rebuild and no dirblock checksum to recompute.
+As far as I know these are the only two reasons to call dir rehash.
+
+Therefore, we can move on to the next dir instead of what we do right
+now, which is try to iterate the dir blocks (which of course fails due
+to the inline_data iflag being set) and then flood stdout with useless
+messages that aren't even failures.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ e2fsck/rehash.c | 7 +++++--
+ 1 file changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/e2fsck/rehash.c b/e2fsck/rehash.c
+index 8a994537..3b057158 100644
+--- a/e2fsck/rehash.c
++++ b/e2fsck/rehash.c
+@@ -794,6 +794,11 @@ errcode_t e2fsck_rehash_dir(e2fsck_t ctx, ext2_ino_t ino)
+ 	outdir.hashes = 0;
+ 	e2fsck_read_inode(ctx, ino, &inode, "rehash_dir");
+ 
++	if (EXT2_HAS_INCOMPAT_FEATURE(fs->super,
++				      EXT4_FEATURE_INCOMPAT_INLINE_DATA) &&
++	   (inode.i_flags & EXT4_INLINE_DATA_FL))
++		return 0;
++
+ 	retval = ENOMEM;
+ 	fd.harray = 0;
+ 	dir_buf = malloc(inode.i_size);
+@@ -822,8 +827,6 @@ retry_nohash:
+ 	/* Read in the entire directory into memory */
+ 	retval = ext2fs_block_iterate3(fs, ino, 0, 0,
+ 				       fill_dir_block, &fd);
+-	if (retval == EXT2_ET_INLINE_DATA_CANT_ITERATE)
+-		goto errout;
+ 	if (fd.err) {
+ 		retval = fd.err;
+ 		goto errout;
+-- 
+2.25.1
+

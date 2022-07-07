@@ -1,0 +1,221 @@
+From 1a8015773a9316ee90f713c275fb3a38731735e4 Mon Sep 17 00:00:00 2001
+From: Andreas Dilger <adilger@dilger.ca>
+Date: Fri, 22 Jun 2018 18:08:54 -0400
+Subject: [PATCH] e2fsck: set dir_nlink feature if large dir exists
+
+If there is a directory with more than EXT2_LINK_MAX (65000)
+subdirectories, but the DIR_NLINK feature is not set in the
+superblock, the feature should be set before continuing on
+to change the on-disk directory link count to 1.
+
+While most filesystems should have DIR_NLINK set (it was set
+by default for all ext4 filesystems, and all kernels between
+2.6.23 and 4.12 automatically set it if the directory link
+count grew too large), it is possible that this flag is lost
+due to disk corruption or for an upgraded filesystem.  We no
+longer want kernels to automatically enable features.
+
+Addresses: https://bugzilla.kernel.org/show_bug.cgi?id=196405
+Signed-off-by: Andreas Dilger <adilger@dilger.ca>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass4.c           | 12 ++++++-
+ e2fsck/problem.c         |  5 +++
+ e2fsck/problem.h         |  3 ++
+ tests/f_large_dir/expect | 15 +++++++--
+ tests/f_large_dir/script | 67 +++++++++++++++++++++++++++-------------
+ 5 files changed, 77 insertions(+), 25 deletions(-)
+
+diff --git a/e2fsck/pass4.c b/e2fsck/pass4.c
+index 9a491b13..10be7f87 100644
+--- a/e2fsck/pass4.c
++++ b/e2fsck/pass4.c
+@@ -145,6 +145,7 @@ void e2fsck_pass4(e2fsck_t ctx)
+ #endif
+ 	struct problem_context	pctx;
+ 	__u16	link_count, link_counted;
++	int dir_nlink_fs;
+ 	char	*buf = 0;
+ 	dgrp_t	group, maxgroup;
+ 
+@@ -168,6 +169,8 @@ void e2fsck_pass4(e2fsck_t ctx)
+ 	if (!(ctx->options & E2F_OPT_PREEN))
+ 		fix_problem(ctx, PR_4_PASS_HEADER, &pctx);
+ 
++	dir_nlink_fs = ext2fs_has_feature_dir_nlink(fs->super);
++
+ 	group = 0;
+ 	maxgroup = fs->group_desc_count;
+ 	if (ctx->progress)
+@@ -224,8 +227,15 @@ void e2fsck_pass4(e2fsck_t ctx)
+ 					    &link_counted);
+ 		}
+ 		isdir = ext2fs_test_inode_bitmap2(ctx->inode_dir_map, i);
+-		if (isdir && (link_counted > EXT2_LINK_MAX))
++		if (isdir && (link_counted > EXT2_LINK_MAX)) {
++			if (!dir_nlink_fs &&
++			    fix_problem(ctx, PR_4_DIR_NLINK_FEATURE, &pctx)) {
++				ext2fs_set_feature_dir_nlink(fs->super);
++				ext2fs_mark_super_dirty(fs);
++				dir_nlink_fs = 1;
++			}
+ 			link_counted = 1;
++		}
+ 		if (link_counted != link_count) {
+ 			e2fsck_read_inode_full(ctx, i, EXT2_INODE(inode),
+ 					       inode_size, "pass4");
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index efe98c92..a98bf8c8 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -1883,6 +1883,11 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("@a @i %i ref count is %N, @s %n. "),
+ 	  PROMPT_FIX, PR_PREEN_OK },
+ 
++	/* directory exceeds max links, but no DIR_NLINK feature in superblock*/
++	{ PR_4_DIR_NLINK_FEATURE,
++	  N_("@d exceeds max links, but no DIR_NLINK feature in @S.\n"),
++	  PROMPT_FIX, 0 },
++
+ 	/* Pass 5 errors */
+ 
+ 	/* Pass 5: Checking group summary information */
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index b6bca668..7db122ab 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -1139,6 +1139,9 @@ struct problem_context {
+ /* Extended attribute inode ref count wrong */
+ #define PR_4_EA_INODE_REF_COUNT		0x040005
+ 
++/* directory exceeds max links, but no DIR_NLINK feature in superblock */
++#define PR_4_DIR_NLINK_FEATURE		0x040006
++
+ /*
+  * Pass 5 errors
+  */
+diff --git a/tests/f_large_dir/expect b/tests/f_large_dir/expect
+index b0994605..8f7d99dc 100644
+--- a/tests/f_large_dir/expect
++++ b/tests/f_large_dir/expect
+@@ -1,12 +1,23 @@
++Creating filesystem with 108341 1k blocks and 65072 inodes
++Superblock backups stored on blocks: 
++	8193, 24577, 40961, 57345, 73729
++
++Allocating group tables:      done                            
++Writing inode tables:      done                            
++Writing superblocks and filesystem accounting information:      done
++
+ Pass 1: Checking inodes, blocks, and sizes
+ Pass 2: Checking directory structure
+ Pass 3: Checking directory connectivity
+ Pass 3A: Optimizing directories
+ Pass 4: Checking reference counts
+-Inode 13 ref count is 1, should be 47245.  Fix? yes
++Directory exceeds max links, but no DIR_NLINK feature in superblock.
++Fix? yes
++
++Inode 12 ref count is 65012, should be 1.  Fix? yes
+ 
+ Pass 5: Checking group summary information
+ 
+ test.img: ***** FILE SYSTEM WAS MODIFIED *****
+-test.img: 13/115368 files (0.0% non-contiguous), 32817/460800 blocks
++test.img: 65023/65072 files (0.0% non-contiguous), 96666/108341 blocks
+ Exit status is 1
+diff --git a/tests/f_large_dir/script b/tests/f_large_dir/script
+index e3151817..9af042ca 100644
+--- a/tests/f_large_dir/script
++++ b/tests/f_large_dir/script
+@@ -5,42 +5,65 @@ E2FSCK=../e2fsck/e2fsck
+ NAMELEN=255
+ DIRENT_SZ=8
+ BLOCKSZ=1024
++INODESZ=128
+ DIRENT_PER_LEAF=$((BLOCKSZ / (NAMELEN + DIRENT_SZ)))
+ HEADER=32
+ INDEX_SZ=8
+ INDEX_L1=$(((BLOCKSZ - HEADER) / INDEX_SZ))
+ INDEX_L2=$(((BLOCKSZ - DIRENT_SZ) / INDEX_SZ))
+-ENTRIES=$((INDEX_L1 * INDEX_L2 * DIRENT_PER_LEAF))
++DIRBLK=$((2 + INDEX_L1 * INDEX_L2))
++ENTRIES=$((DIRBLK * DIRENT_PER_LEAF))
++EXT4_LINK_MAX=65000
++if [ $ENTRIES -lt $((EXT4_LINK_MAX + 10)) ]; then
++	ENTRIES=$((EXT4_LINK_MAX + 10))
++	DIRBLK=$((ENTRIES / DIRENT_PER_LEAF + 3))
++fi
++# directory leaf blocks plus inode count and 25% for the rest of the fs
++FSIZE=$(((DIRBLK + EXT4_LINK_MAX * ((BLOCKSZ + INODESZ) / BLOCKSZ)) * 5 / 4))
+ 
+-$MKE2FS -b 1024 -O large_dir,uninit_bg,dir_nlink -F $TMPFILE 460800 \
+-	> /dev/null 2>&1
++$MKE2FS -b 1024 -O large_dir,uninit_bg -N $((ENTRIES + 50)) \
++	-I $INODESZ -F $TMPFILE $FSIZE > $OUT.new 2>&1
++RC=$?
++if [ $RC -eq 0 ]; then
+ {
+-	echo "feature large_dir"
++	START=$SECONDS
+ 	echo "mkdir /foo"
+ 	echo "cd /foo"
+-	touch foofile
+-	echo "write foofile foofile"
++	touch $TMPFILE.tmp
++	echo "write $TMPFILE.tmp foofile"
+ 	i=0
+-	while test $i  -lt $ENTRIES ; do
+-	    if test $(( i % DIRENT_PER_LEAF )) -eq 0 ; then
+-		echo "expand ./"
++	last=0
++	while test $i -lt $ENTRIES ; do
++	    if test $((i % DIRENT_PER_LEAF)) -eq 0; then
++	    	echo "expand ./"
+ 	    fi
+-	    if test $(( i % 5000 )) -eq 0 -a $i -gt 0 ; then
+-		>&2 echo "$test_name: $i/$ENTRIES processed"
++	    ELAPSED=$((SECONDS - START))
++	    if test $((i % 5000)) -eq 0 -a $ELAPSED -gt 10; then
++		RATE=$(((i - last) / ELAPSED))
++		echo "$test_name: $i/$ENTRIES links, ${ELAPSED}s @ $RATE/s" >&2
++		START=$SECONDS
++		last=$i
+ 	    fi
+-	    printf "ln foofile %0255X\n" $i
+-	    i=$(($i + 1))
++	    if test $i -lt $((EXT4_LINK_MAX + 10)); then
++		printf "mkdir d%0254u\n" $i
++	    else
++		printf "ln foofile f%0254u\n" $i
++	    fi
++	    i=$((i + 1))
+ 	done
+-} | $DEBUGFS -w $TMPFILE > /dev/null 2>&1
+-
+-$E2FSCK -yfD $TMPFILE > $OUT.new 2>&1
+-status=$?
+-echo Exit status is $status >> $OUT.new
+-sed -f $cmd_dir/filter.sed -e "s;$TMPFILE;test.img;" $OUT.new > $OUT
+-rm -f $OUT.new
++} | $DEBUGFS -w $TMPFILE > /dev/null 2>> $OUT.new
++	RC=$?
++fi
++if [ $RC -eq 0 ]; then
++	$E2FSCK -yfD $TMPFILE >> $OUT.new 2>&1
++	status=$?
++	echo Exit status is $status >> $OUT.new
++	sed -f $cmd_dir/filter.sed -e "s;$TMPFILE;test.img;" $OUT.new > $OUT
++	rm -f $OUT.new
+ 
+-cmp -s $OUT $EXP
+-RC=$?
++	cmp -s $OUT $EXP
++	RC=$?
++fi
+ if [ $RC -eq 0 ]; then
+ 	echo "$test_name: $test_description: ok"
+ 	touch $test_name.ok
+-- 
+2.25.1
+

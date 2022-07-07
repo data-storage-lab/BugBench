@@ -1,0 +1,51 @@
+From a8d632a4e9fd528631d2ce8c28b4aade8da0a862 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Tue, 17 Jun 2008 01:53:53 -0400
+Subject: [PATCH] resize2fs: Prohibit the combination of flex_bg and
+ !resize_inode
+
+This is a potentially a difficult case for resize2fs to handle, so
+prohibit it for now.
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ resize/main.c | 21 ++++++++++++++++++++-
+ 1 file changed, 20 insertions(+), 1 deletion(-)
+
+diff --git a/resize/main.c b/resize/main.c
+index d7097ada..1cb0b208 100644
+--- a/resize/main.c
++++ b/resize/main.c
+@@ -316,9 +316,28 @@ int main (int argc, char ** argv)
+ 			"(%s)", device_name);
+ 		exit(1);
+ 	}
++
++	/*
++	 * XXXX   The combination of flex_bg and !resize_inode causes
++	 * major problems for resize2fs, since when the group descriptors
++	 * grow in size this can potentially require multiple inode
++	 * tables to be moved aside to make room, and resize2fs chokes
++	 * rather badly in this scenario.  It's a rare combination,
++	 * except when a filesystem is expanded more than a certain
++	 * size, so for now, we'll just prohibit that combination.
++	 * This is something we should fix eventually, though.
++	 */
++	if ((fs->super->s_feature_incompat & EXT4_FEATURE_INCOMPAT_FLEX_BG) &&
++	    !(fs->super->s_feature_compat & EXT2_FEATURE_COMPAT_RESIZE_INODE)) {
++		com_err(program_name, 0, _("%s: The combination of flex_bg "
++					   "and\n\t!resize_inode features "
++					   "is not supported by resize2fs.\n"),
++			device_name);
++		exit(1);
++	}
+ 	
+ 	if (print_min_size) {
+-		printf("Estimated minimum size of the filesystem: %u\n",
++		printf(_("Estimated minimum size of the filesystem: %u\n"),
+ 		       calculate_minimum_resize_size(fs));
+ 		exit(0);
+ 	}
+-- 
+2.25.1
+

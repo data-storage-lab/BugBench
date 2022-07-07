@@ -1,0 +1,42 @@
+From 554bc091b7e8a24acc737ab68bc00d2e04354653 Mon Sep 17 00:00:00 2001
+From: Robin Dong <sanbai@taobao.com>
+Date: Fri, 11 Nov 2011 21:15:55 -0500
+Subject: [PATCH] e2freefrag: fix "Illegal block number" errors with bigalloc
+ file systems
+
+After:
+# mke2fs -O ^has_journal,^resize_inode,^uninit_bg,extent,meta_bg,flex_bg,bigalloc /dev/sda
+# e2freefrag /dev/sda
+
+It will report error message like:
+
+ Illegal block number passed to ext2fs_test_block_bitmap #1732133 for block bitmap for /dev/sda
+ Illegal block number passed to ext2fs_test_block_bitmap #1732134 for block bitmap for /dev/sda
+ Illegal block number passed to ext2fs_test_block_bitmap #1732135 for block bitmap for /dev/sda
+
+One bit in bitmap of bigalloc-ext4 means a cluster not a block,
+therefore ext2fs_fast_test_block_bitmap2 should check cluster.
+
+Signed-off-by: Robin Dong <sanbai@taobao.com>
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ misc/e2freefrag.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/misc/e2freefrag.c b/misc/e2freefrag.c
+index b442f324..a09df6bf 100644
+--- a/misc/e2freefrag.c
++++ b/misc/e2freefrag.c
+@@ -121,7 +121,7 @@ void scan_block_bitmap(ext2_filsys fs, struct chunk_info *info)
+ 				chunk_start_blk = blk;
+ 			}
+ 			used = ext2fs_fast_test_block_bitmap2(fs->block_map,
+-							     chunk_start_blk);
++				chunk_start_blk >> fs->cluster_ratio_bits);
+ 			if (!used) {
+ 				last_chunk_size++;
+ 				chunk_free++;
+-- 
+2.25.1
+

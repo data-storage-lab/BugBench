@@ -1,0 +1,118 @@
+From 5c2a665afad4c83e34bc05953ffbe3d70dd5d72c Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Fri, 11 Nov 2016 18:39:26 -0500
+Subject: [PATCH] Avoid dereferencing beyond allocated memory in quota handling
+
+The quota support code must must not try to handle the project quota
+if the the project feature is not enabled.
+
+Problem detected by ASAN.
+
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ debugfs/quota.c       |  2 +-
+ e2fsck/unix.c         | 11 ++---------
+ lib/support/mkquota.c |  9 +++++++--
+ misc/mke2fs.c         |  2 +-
+ misc/tune2fs.c        |  2 +-
+ 5 files changed, 12 insertions(+), 14 deletions(-)
+
+diff --git a/debugfs/quota.c b/debugfs/quota.c
+index 9b8dbaf0..cf1078c1 100644
+--- a/debugfs/quota.c
++++ b/debugfs/quota.c
+@@ -42,7 +42,7 @@ static int load_quota_ctx(char *progname)
+ 	if (current_qctx)
+ 		return 0;
+ 
+-	retval = quota_init_context(&current_qctx, current_fs, QUOTA_ALL_BIT);
++	retval = quota_init_context(&current_qctx, current_fs, 0);
+ 	if (retval) {
+ 		com_err(current_fs->device_name, retval,
+ 			"while trying to load quota information");
+diff --git a/e2fsck/unix.c b/e2fsck/unix.c
+index e00fa166..eb9f3119 100644
+--- a/e2fsck/unix.c
++++ b/e2fsck/unix.c
+@@ -1338,7 +1338,6 @@ int main (int argc, char *argv[])
+ 	int old_bitmaps;
+ 	__u32 features[3];
+ 	char *cp;
+-	unsigned int qtype_bits = 0;
+ 	enum quota_type qtype;
+ 
+ 	clear_problem_context(&pctx);
+@@ -1786,14 +1785,8 @@ print_unsupp_features:
+ 
+ 	if (ext2fs_has_feature_quota(sb)) {
+ 		/* Quotas were enabled. Do quota accounting during fsck. */
+-		for (qtype = 0; qtype < MAXQUOTAS; qtype++) {
+-			if (*quota_sb_inump(sb, qtype) != 0)
+-				qtype_bits |= 1 << qtype;
+-		}
+-
+ 		clear_problem_context(&pctx);
+-		pctx.errcode = quota_init_context(&ctx->qctx, ctx->fs,
+-						  qtype_bits);
++		pctx.errcode = quota_init_context(&ctx->qctx, ctx->fs, 0);
+ 		if (pctx.errcode) {
+ 			fix_problem(ctx, PR_0_QUOTA_INIT_CTX, &pctx);
+ 			fatal_error(ctx, 0);
+@@ -1842,7 +1835,7 @@ no_journal:
+ 		int needs_writeout;
+ 
+ 		for (qtype = 0; qtype < MAXQUOTAS; qtype++) {
+-			if (((1 << qtype) & qtype_bits) == 0)
++			if (*quota_sb_inump(sb, qtype) == 0)
+ 				continue;
+ 			needs_writeout = 0;
+ 			pctx.num = qtype;
+diff --git a/lib/support/mkquota.c b/lib/support/mkquota.c
+index 8407c76e..86292667 100644
+--- a/lib/support/mkquota.c
++++ b/lib/support/mkquota.c
+@@ -296,8 +296,13 @@ errcode_t quota_init_context(quota_ctx_t *qctx, ext2_filsys fs,
+ 	memset(ctx, 0, sizeof(struct quota_ctx));
+ 	for (qtype = 0; qtype < MAXQUOTAS; qtype++) {
+ 		ctx->quota_file[qtype] = NULL;
+-		if (((1 << qtype) & qtype_bits) == 0)
+-			continue;
++		if (qtype_bits) {
++			if (((1 << qtype) & qtype_bits) == 0)
++				continue;
++		} else {
++			if (*quota_sb_inump(fs->super, qtype) == 0)
++				continue;
++		}
+ 		err = ext2fs_get_mem(sizeof(dict_t), &dict);
+ 		if (err) {
+ 			log_debug("Failed to allocate dictionary");
+diff --git a/misc/mke2fs.c b/misc/mke2fs.c
+index 6a83bd9f..54dd9263 100644
+--- a/misc/mke2fs.c
++++ b/misc/mke2fs.c
+@@ -2714,7 +2714,7 @@ static int create_quota_inodes(ext2_filsys fs)
+ 	quota_ctx_t qctx;
+ 	errcode_t retval;
+ 
+-	retval = quota_init_context(&qctx, fs, QUOTA_ALL_BIT);
++	retval = quota_init_context(&qctx, fs, quotatype_bits);
+ 	if (retval) {
+ 		com_err(program_name, retval,
+ 			_("while initializing quota context"));
+diff --git a/misc/tune2fs.c b/misc/tune2fs.c
+index 09e65baf..62395776 100644
+--- a/misc/tune2fs.c
++++ b/misc/tune2fs.c
+@@ -1492,7 +1492,7 @@ static void handle_quota_options(ext2_filsys fs)
+ 		/* Nothing to do. */
+ 		return;
+ 
+-	retval = quota_init_context(&qctx, fs, QUOTA_ALL_BIT);
++	retval = quota_init_context(&qctx, fs, 0);
+ 	if (retval) {
+ 		com_err(program_name, retval,
+ 			_("while initializing quota context in support library"));
+-- 
+2.25.1
+

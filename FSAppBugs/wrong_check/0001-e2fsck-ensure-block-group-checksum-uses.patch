@@ -1,0 +1,138 @@
+From 387e6384cbb74fb68f6c0a64c9c3b72b8abc6699 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <djwong@us.ibm.com>
+Date: Thu, 2 Aug 2012 20:47:45 -0400
+Subject: [PATCH] e2fsck: ensure block group checksum uses
+
+Use the helper function to determine if group descriptors have a
+checksum.  Ensure that metadata_csum and uninit_bg flags are not set
+simultaneously, as part of pass 0.
+
+Signed-off-by: Darrick J. Wong <djwong@us.ibm.com>
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ e2fsck/pass5.c   |  6 ++----
+ e2fsck/problem.c |  9 +++++++++
+ e2fsck/problem.h |  8 ++++++++
+ e2fsck/super.c   | 16 ++++++++++++++--
+ e2fsck/unix.c    |  2 +-
+ 5 files changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/e2fsck/pass5.c b/e2fsck/pass5.c
+index 0477e601..ff717b35 100644
+--- a/e2fsck/pass5.c
++++ b/e2fsck/pass5.c
+@@ -372,8 +372,7 @@ static void check_block_bitmaps(e2fsck_t ctx)
+ 		goto errout;
+ 	}
+ 
+-	csum_flag = EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
+-					       EXT4_FEATURE_RO_COMPAT_GDT_CSUM);
++	csum_flag = ext2fs_has_group_desc_csum(fs);
+ redo_counts:
+ 	had_problem = 0;
+ 	save_problem = 0;
+@@ -656,8 +655,7 @@ static void check_inode_bitmaps(e2fsck_t ctx)
+ 		goto errout;
+ 	}
+ 
+-	csum_flag = EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
+-					       EXT4_FEATURE_RO_COMPAT_GDT_CSUM);
++	csum_flag = ext2fs_has_group_desc_csum(fs);
+ redo_counts:
+ 	had_problem = 0;
+ 	save_problem = 0;
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index 1f595645..c948fcd6 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -433,6 +433,15 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("ext2fs_check_desc: %m\n"),
+ 	  PROMPT_NONE, 0 },
+ 
++	/*
++	 * metadata_csum implies uninit_bg; both feature bits cannot
++	 * be set simultaneously.
++	 */
++	{ PR_0_META_AND_GDT_CSUM_SET,
++	  N_("@S metadata_csum supersedes uninit_bg; both feature "
++	     "bits cannot be set simultaneously."),
++	  PROMPT_FIX, PR_PREEN_OK | PR_NO_OK},
++
+ 	/* Pass 1 errors */
+ 
+ 	/* Pass 1: Checking inodes, blocks, and sizes */
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index f87f4e81..db135dcc 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -249,6 +249,13 @@ struct problem_context {
+ /* Checking group descriptor failed */
+ #define PR_0_CHECK_DESC_FAILED			0x000045
+ 
++/*
++ * metadata_csum supersedes uninit_bg; both feature bits cannot be set
++ * simultaneously.
++ */
++#define PR_0_META_AND_GDT_CSUM_SET		0x000046
++
++
+ /*
+  * Pass 1 errors
+  */
+@@ -576,6 +583,7 @@ struct problem_context {
+ /* ea block passes checks, but checksum invalid */
+ #define PR_1_EA_BLOCK_ONLY_CSUM_INVALID        0x01006C
+ 
++
+ /*
+  * Pass 1b errors
+  */
+diff --git a/e2fsck/super.c b/e2fsck/super.c
+index a8fe571f..4a636cc2 100644
+--- a/e2fsck/super.c
++++ b/e2fsck/super.c
+@@ -581,14 +581,26 @@ void check_super_block(e2fsck_t ctx)
+ 		}
+ 	}
+ 
++	/* Are metadata_csum and uninit_bg both set? */
++	if (EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
++				       EXT4_FEATURE_RO_COMPAT_METADATA_CSUM) &&
++	    EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
++				       EXT4_FEATURE_RO_COMPAT_GDT_CSUM) &&
++	    fix_problem(ctx, PR_0_META_AND_GDT_CSUM_SET, &pctx)) {
++		fs->super->s_feature_ro_compat &=
++			~EXT4_FEATURE_RO_COMPAT_GDT_CSUM;
++		ext2fs_mark_super_dirty(fs);
++		for (i = 0; i < fs->group_desc_count; i++)
++			ext2fs_group_desc_csum_set(fs, i);
++	}
++
+ 	/*
+ 	 * Verify the group descriptors....
+ 	 */
+ 	first_block = sb->s_first_data_block;
+ 	last_block = ext2fs_blocks_count(sb)-1;
+ 
+-	csum_flag = EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
+-					       EXT4_FEATURE_RO_COMPAT_GDT_CSUM);
++	csum_flag = ext2fs_has_group_desc_csum(fs);
+ 	for (i = 0; i < fs->group_desc_count; i++) {
+ 		pctx.group = i;
+ 
+diff --git a/e2fsck/unix.c b/e2fsck/unix.c
+index b596a694..e058d2b6 100644
+--- a/e2fsck/unix.c
++++ b/e2fsck/unix.c
+@@ -1747,7 +1747,7 @@ no_journal:
+ 	}
+ 
+ 	if ((run_result & E2F_FLAG_CANCEL) == 0 &&
+-	    sb->s_feature_ro_compat & EXT4_FEATURE_RO_COMPAT_GDT_CSUM &&
++	    ext2fs_has_group_desc_csum(ctx->fs) &&
+ 	    !(ctx->options & E2F_OPT_READONLY)) {
+ 		retval = ext2fs_set_gdt_csum(ctx->fs);
+ 		if (retval) {
+-- 
+2.25.1
+

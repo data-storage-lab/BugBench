@@ -1,0 +1,80 @@
+From ddcf1dbff2b8523c2207fbebaa4e5f42880dd2a3 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sat, 29 Dec 2012 03:25:10 -0500
+Subject: [PATCH] resize2fs: handle bg descriptors which overlap with other
+ bg's metadata
+
+With flex_bg file systems, bg-specific metadata (i.e., bitmaps and the
+inode table blocks) can be located in another block group.  Hence,
+when we grow the number of block group descriptors, we need to check
+if we need to relocate metadata blocks not just for the block group
+where the bgd blocks are located, but in all block groups.
+
+This change fixes the following test case:
+
+rm -f foo.img; touch foo.img
+truncate -s 32G foo.img
+mke2fs -F -t ext4 -E resize=12582912 foo.img
+e2fsck -f foo.img
+truncate -s 256G foo.img
+./resize2fs foo.img
+e2fsck -fy foo.img
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ resize/resize2fs.c | 35 +++++++++++++++++++++++++++++++----
+ 1 file changed, 31 insertions(+), 4 deletions(-)
+
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index 97026450..159846db 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -745,14 +745,41 @@ static void mark_fs_metablock(ext2_resize_t rfs,
+ 	if (IS_BLOCK_BM(fs, group, blk)) {
+ 		ext2fs_block_bitmap_loc_set(fs, group, 0);
+ 		rfs->needed_blocks++;
+-	} else if (IS_INODE_BM(fs, group, blk)) {
++		return;
++	}
++	if (IS_INODE_BM(fs, group, blk)) {
+ 		ext2fs_inode_bitmap_loc_set(fs, group, 0);
+ 		rfs->needed_blocks++;
+-	} else if (IS_INODE_TB(fs, group, blk)) {
++		return;
++	}
++	if (IS_INODE_TB(fs, group, blk)) {
+ 		ext2fs_inode_table_loc_set(fs, group, 0);
+ 		rfs->needed_blocks++;
+-	} else if (EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
+-					      EXT4_FEATURE_RO_COMPAT_GDT_CSUM) &&
++		return;
++	}
++	if (fs->super->s_feature_incompat & EXT4_FEATURE_INCOMPAT_FLEX_BG) {
++		dgrp_t i;
++
++		for (i=0; i < rfs->old_fs->group_desc_count; i++) {
++			if (IS_BLOCK_BM(fs, i, blk)) {
++				ext2fs_block_bitmap_loc_set(fs, i, 0);
++				rfs->needed_blocks++;
++				return;
++			}
++			if (IS_INODE_BM(fs, i, blk)) {
++				ext2fs_inode_bitmap_loc_set(fs, i, 0);
++				rfs->needed_blocks++;
++				return;
++			}
++			if (IS_INODE_TB(fs, i, blk)) {
++				ext2fs_inode_table_loc_set(fs, i, 0);
++				rfs->needed_blocks++;
++				return;
++			}
++		}
++	}
++	if (EXT2_HAS_RO_COMPAT_FEATURE(fs->super,
++				       EXT4_FEATURE_RO_COMPAT_GDT_CSUM) &&
+ 		   (ext2fs_bg_flags_test(fs, group, EXT2_BG_BLOCK_UNINIT))) {
+ 		/*
+ 		 * If the block bitmap is uninitialized, which means
+-- 
+2.25.1
+

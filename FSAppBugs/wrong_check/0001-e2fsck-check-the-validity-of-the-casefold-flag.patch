@@ -1,0 +1,157 @@
+From 16eca7ce12e8c4613cc3a9940c62b687e27da514 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Mon, 2 Sep 2019 20:49:09 -0400
+Subject: [PATCH] e2fsck: check the validity of the casefold flag
+
+The casefold flag is only allowed on directories and when the casefold
+feature is enabled.
+
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass1.c                          | 12 +++++++++++-
+ e2fsck/problem.c                        | 18 +++++++++++++++---
+ e2fsck/problem.h                        | 10 +++++++++-
+ tests/f_bad_disconnected_inode/expect.1 |  6 ++++++
+ 4 files changed, 41 insertions(+), 5 deletions(-)
+
+diff --git a/e2fsck/pass1.c b/e2fsck/pass1.c
+index 2b5bfa32..b1469088 100644
+--- a/e2fsck/pass1.c
++++ b/e2fsck/pass1.c
+@@ -1171,7 +1171,7 @@ void e2fsck_pass1(e2fsck_t ctx)
+ 	struct		scan_callback_struct scan_struct;
+ 	struct ext2_super_block *sb = ctx->fs->super;
+ 	const char	*old_op;
+-	int		imagic_fs, extent_fs, inlinedata_fs;
++	int		imagic_fs, extent_fs, inlinedata_fs, casefold_fs;
+ 	int		low_dtime_check = 1;
+ 	unsigned int	inode_size = EXT2_INODE_SIZE(fs->super);
+ 	unsigned int	bufsize;
+@@ -1217,6 +1217,7 @@ void e2fsck_pass1(e2fsck_t ctx)
+ 	imagic_fs = ext2fs_has_feature_imagic_inodes(sb);
+ 	extent_fs = ext2fs_has_feature_extents(sb);
+ 	inlinedata_fs = ext2fs_has_feature_inline_data(sb);
++	casefold_fs = ext2fs_has_feature_casefold(sb);
+ 
+ 	/*
+ 	 * Allocate bitmaps structures
+@@ -1482,6 +1483,15 @@ void e2fsck_pass1(e2fsck_t ctx)
+ 			continue;
+ 		}
+ 
++		if ((inode->i_flags & EXT4_CASEFOLD_FL) &&
++		    ((!LINUX_S_ISDIR(inode->i_mode) &&
++		      fix_problem(ctx, PR_1_CASEFOLD_NONDIR, &pctx)) ||
++		     (!casefold_fs &&
++		      fix_problem(ctx, PR_1_CASEFOLD_FEATURE, &pctx)))) {
++			inode->i_flags &= ~EXT4_CASEFOLD_FL;
++			e2fsck_write_inode(ctx, ino, inode, "pass1");
++		}
++
+ 		/* Conflicting inlinedata/extents inode flags? */
+ 		if ((inode->i_flags & EXT4_INLINE_DATA_FL) &&
+ 		    (inode->i_flags & EXT4_EXTENTS_FL)) {
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index c45c6b78..5eb5973d 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -42,7 +42,8 @@
+ #define PROMPT_CLEAR_HTREE 18
+ #define PROMPT_RECREATE 19
+ #define PROMPT_OPTIMIZE 20
+-#define PROMPT_NULL	21
++#define PROMPT_CLEAR_FLAG 21
++#define PROMPT_NULL	22
+ 
+ /*
+  * These are the prompts which are used to ask the user if they want
+@@ -70,7 +71,8 @@ static const char *prompt[] = {
+ 	N_("Clear HTree index"),/* 18 */
+ 	N_("Recreate"),		/* 19 */
+ 	N_("Optimize"),		/* 20 */
+-	"",			/* 21 */
++	N_("Clear flag"),	/* 21 */
++	"",			/* 22 */
+ };
+ 
+ /*
+@@ -99,7 +101,8 @@ static const char *preen_msg[] = {
+ 	N_("HTREE INDEX CLEARED"),/* 18 */
+ 	N_("WILL RECREATE"),	/* 19 */
+ 	N_("WILL OPTIMIZE"),	/* 20 */
+-	"",			/* 21 */
++	N_("FLAG CLEARED"),	/* 21 */
++	"",			/* 22 */
+ };
+ 
+ #if __GNUC_PREREQ (4, 6)
+@@ -1240,6 +1243,15 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("EA @i %N for parent @i %i missing EA_INODE flag.\n "),
+ 	  PROMPT_FIX, PR_PREEN_OK, 0, 0, 0 },
+ 
++	/* Casefold flag set on a non-directory */
++	{ PR_1_CASEFOLD_NONDIR,
++	  N_("@i %i has the casefold flag set but is not a directory.  "),
++	  PROMPT_CLEAR_FLAG, 0, 0, 0, 0 },
++
++	/* Casefold flag set, but file system is missing the casefold feature */
++	{ PR_1_CASEFOLD_FEATURE,
++	  N_("@d %p has the casefold flag, but the\ncasefold feature is not enabled.  "),
++	  PROMPT_CLEAR_FLAG, 0, 0, 0, 0 },
+ 
+ 	/* Pass 1b errors */
+ 
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index 2c79169e..5cc89249 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -565,7 +565,6 @@ struct problem_context {
+ #define PR_1_EXTENTS_SET			0x01005A
+ 
+ /* inode is in extents format, but superblock is missing EXTENTS feature */
+-/* inode has extents, superblock missing INCOMPAT_EXTENTS feature */
+ #define PR_1_EXTENT_FEATURE			0x01005B
+ 
+ /* inode missing EXTENTS_FL, but is an extent inode */
+@@ -693,6 +692,15 @@ struct problem_context {
+ /* EA inode for parent inode does not have EXT4_EA_INODE_FL flag */
+ #define PR_1_ATTR_SET_EA_INODE_FL		0x010086
+ 
++/* Offer to clear uninitialized flag on an extent */
++#define PR_1_CLEAR_UNINIT_EXTENT		0x010087
++
++/* Casefold flag set on a non-directory */
++#define PR_1_CASEFOLD_NONDIR			0x010088
++
++/* Casefold flag set, but file system is missing the casefold feature */
++#define PR_1_CASEFOLD_FEATURE			0x010089
++
+ 
+ /*
+  * Pass 1b errors
+diff --git a/tests/f_bad_disconnected_inode/expect.1 b/tests/f_bad_disconnected_inode/expect.1
+index c5ea7bf4..d1479cef 100644
+--- a/tests/f_bad_disconnected_inode/expect.1
++++ b/tests/f_bad_disconnected_inode/expect.1
+@@ -2,12 +2,18 @@ Pass 1: Checking inodes, blocks, and sizes
+ Inode 1 has EXTENTS_FL flag set on filesystem without extents support.
+ Clear? yes
+ 
++Inode 9 has the casefold flag set but is not a directory.  Clear flag? yes
++
++Inode 14 has the casefold flag set but is not a directory.  Clear flag? yes
++
+ Inode 14 has INLINE_DATA_FL flag on filesystem without inline data support.
+ Clear? yes
+ 
+ Inode 15 has INLINE_DATA_FL flag on filesystem without inline data support.
+ Clear? yes
+ 
++Inode 16 has the casefold flag set but is not a directory.  Clear flag? yes
++
+ Inode 16 has INLINE_DATA_FL flag on filesystem without inline data support.
+ Clear? yes
+ 
+-- 
+2.25.1
+

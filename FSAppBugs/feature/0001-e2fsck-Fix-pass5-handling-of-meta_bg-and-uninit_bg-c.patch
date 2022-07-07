@@ -1,0 +1,65 @@
+From 4a2924eaa371da712d610062367b7e9c3478b055 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sat, 19 Apr 2008 10:30:59 -0400
+Subject: [PATCH] e2fsck: Fix pass5 handling of meta_bg and uninit_bg
+ combination
+
+The pass5 lazy block group support didn't understand meta_bg formats
+correctly.  Fix this.
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ e2fsck/pass5.c | 29 +++++++++++++++++++++++------
+ 1 file changed, 23 insertions(+), 6 deletions(-)
+
+diff --git a/e2fsck/pass5.c b/e2fsck/pass5.c
+index b70e8d14..0f41a7e8 100644
+--- a/e2fsck/pass5.c
++++ b/e2fsck/pass5.c
+@@ -176,11 +176,30 @@ redo_counts:
+ 		actual = ext2fs_fast_test_block_bitmap(ctx->block_found_map, i);
+ 
+ 		if (skip_group) {
+-			if ((i >= super) &&
+-			    (i <= super + fs->desc_blocks) &&
+-			    ext2fs_bg_has_super(fs, group))
++			blk_t	super_blk, old_desc_blk, new_desc_blk;
++			int	old_desc_blocks;
++
++			ext2fs_super_and_bgd_loc(fs, group, &super_blk,
++					 &old_desc_blk, &new_desc_blk, 0);
++
++			if (fs->super->s_feature_incompat &
++			    EXT2_FEATURE_INCOMPAT_META_BG)
++				old_desc_blocks = fs->super->s_first_meta_bg;
++			else
++				old_desc_blocks = fs->desc_blocks +
++					fs->super->s_reserved_gdt_blocks;
++
++			bitmap = 0;
++			if (i == super_blk)
++				bitmap = 1;
++			if (old_desc_blk && old_desc_blocks &&
++			    (i >= old_desc_blk) &&
++			    (i < old_desc_blk + old_desc_blocks))
+ 				bitmap = 1;
+-			else if (i == fs->group_desc[group].bg_block_bitmap)
++			if (new_desc_blk &&
++			    (i == new_desc_blk))
++				bitmap = 1;
++			if (i == fs->group_desc[group].bg_block_bitmap)
+ 				bitmap = 1;
+ 			else if (i == fs->group_desc[group].bg_inode_bitmap)
+ 				bitmap = 1;
+@@ -188,8 +207,6 @@ redo_counts:
+ 				 (i < fs->group_desc[group].bg_inode_table
+ 				  + fs->inode_blocks_per_group))
+ 				bitmap = 1;
+-			else
+-				bitmap = 0;
+ 			actual = (actual != 0);
+ 		} else
+ 			bitmap = ext2fs_fast_test_block_bitmap(fs->block_map, i);
+-- 
+2.25.1
+

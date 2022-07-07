@@ -1,0 +1,103 @@
+From 4b3038134baf81c6f9bd36dbbf565ea66e46331f Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sat, 20 Oct 2018 09:14:48 -0400
+Subject: [PATCH] resize2fs: update checksums in the extent tree's relocated
+ block
+
+When shrinking an file system, and we need to relocate an inode, the
+checksums in its extent tree must get updated to reflect its new inode
+number.  When doing this, we need to do this *after* we update the
+extent tree to reflect any blocks which need to be relocated due to
+the file system shrink operation.
+
+Otherwise, in the case where only an interior node of the extent tree
+needs to get relocated, and none of the entries in that node need to
+be adjusted, the checksum for that interior node is updated in the old
+copy of that block, and then after the extent tree is updated to use
+the new copy of that interior node, the extent tree is left with an
+invalid checksum.
+
+This is a relatively rare case, since it requires the following
+conditions to be true:
+
+*)  The metadata checksum feature must be enabled.
+*)  An inode needs to be relocated.
+*)  The inode needs to have an interior node.
+*)  The block for that interior node needs to be relocated.
+*)  None of blocks addressed by entries in that interior node needs
+    to be relocated.
+
+When all of these conditions are true, though, the file system is left
+with corrupted with bad checksum for the extent tree block.
+
+Addresses-Launchpad-Bug: 1798562
+
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+Reported-by: Jean-Baptiste Lallement <jean-baptiste.lallement@ubuntu.com>
+---
+ resize/resize2fs.c | 22 ++++++++++------------
+ 1 file changed, 10 insertions(+), 12 deletions(-)
+
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index e8940504..38032e5c 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -2244,31 +2244,20 @@ remap_blocks:
+ 		if (retval)
+ 			goto errout;
+ 
+-		/* Rewrite extent block checksums with new inode number */
+-		if (ext2fs_has_feature_metadata_csum(rfs->old_fs->super) &&
+-		    (inode->i_flags & EXT4_EXTENTS_FL)) {
+-			rfs->old_fs->flags |= EXT2_FLAG_IGNORE_CSUM_ERRORS;
+-			retval = rewrite_extents(rfs->old_fs, new_inode);
+-			rfs->old_fs->flags &= ~EXT2_FLAG_IGNORE_CSUM_ERRORS;
+-			if (retval)
+-				goto errout;
+-		}
+-
+ 		/*
+ 		 * Update inodes to point to new blocks; schedule directory
+ 		 * blocks for inode remapping.  Need to write out dir blocks
+ 		 * with new inode numbers if we have metadata_csum enabled.
+ 		 */
++		rfs->old_fs->flags |= EXT2_FLAG_IGNORE_CSUM_ERRORS;
+ 		if (ext2fs_inode_has_valid_blocks2(rfs->old_fs, inode) &&
+ 		    (rfs->bmap || pb.is_dir)) {
+ 			pb.ino = new_inode;
+ 			pb.old_ino = ino;
+ 			pb.has_extents = inode->i_flags & EXT4_EXTENTS_FL;
+-			rfs->old_fs->flags |= EXT2_FLAG_IGNORE_CSUM_ERRORS;
+ 			retval = ext2fs_block_iterate3(rfs->old_fs,
+ 						       new_inode, 0, block_buf,
+ 						       process_block, &pb);
+-			rfs->old_fs->flags &= ~EXT2_FLAG_IGNORE_CSUM_ERRORS;
+ 			if (retval)
+ 				goto errout;
+ 			if (pb.error) {
+@@ -2283,6 +2272,14 @@ remap_blocks:
+ 			if (retval)
+ 				goto errout;
+ 		}
++
++		/* Fix up extent block checksums with the new inode number */
++		if (ext2fs_has_feature_metadata_csum(rfs->old_fs->super) &&
++		    (inode->i_flags & EXT4_EXTENTS_FL)) {
++			retval = rewrite_extents(rfs->old_fs, new_inode);
++			if (retval)
++				goto errout;
++		}
+ 	}
+ 
+ 	if (update_ea_inode_refs &&
+@@ -2296,6 +2293,7 @@ remap_blocks:
+ 
+ errout:
+ 	reset_com_err_hook();
++	rfs->old_fs->flags &= ~EXT2_FLAG_IGNORE_CSUM_ERRORS;
+ 	if (rfs->bmap) {
+ 		ext2fs_free_extent_table(rfs->bmap);
+ 		rfs->bmap = 0;
+-- 
+2.25.1
+

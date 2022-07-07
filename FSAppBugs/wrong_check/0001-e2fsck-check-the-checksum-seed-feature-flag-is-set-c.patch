@@ -1,0 +1,66 @@
+From 17f2fbf7371f2f1a1d35af986af24cfc57e3e8a0 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Sat, 5 Mar 2016 12:52:55 -0500
+Subject: [PATCH] e2fsck: check the checksum seed feature flag is set correctly
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/problem.c | 5 +++++
+ e2fsck/problem.h | 3 +++
+ e2fsck/super.c   | 9 +++++++++
+ 3 files changed, 17 insertions(+)
+
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index a7da94dc..971b0ad0 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -467,6 +467,11 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("External @j @S checksum does not match @S.  "),
+ 	  PROMPT_FIX, PR_PREEN_OK },
+ 
++	/* metadata_csum_seed means nothing without metadata_csum */
++	{ PR_0_CSUM_SEED_WITHOUT_META_CSUM,
++	  N_("@S metadata_csum_seed is not necessary without metadata_csum."),
++	  PROMPT_FIX, PR_PREEN_OK | PR_NO_OK},
++
+ 	/* Pass 1 errors */
+ 
+ 	/* Pass 1: Checking inodes, blocks, and sizes */
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index 3b92e411..b3f5b8f2 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -268,6 +268,9 @@ struct problem_context {
+ /* External journal has corrupt superblock */
+ #define PR_0_EXT_JOURNAL_SUPER_CSUM_INVALID	0x00004A
+ 
++/* metadata_csum_seed means nothing without metadata_csum */
++#define PR_0_CSUM_SEED_WITHOUT_META_CSUM	0x00004B
++
+ /*
+  * Pass 1 errors
+  */
+diff --git a/e2fsck/super.c b/e2fsck/super.c
+index af6d6800..e09c14c6 100644
+--- a/e2fsck/super.c
++++ b/e2fsck/super.c
+@@ -589,6 +589,15 @@ void check_super_block(e2fsck_t ctx)
+ 			ext2fs_group_desc_csum_set(fs, i);
+ 	}
+ 
++	/* We can't have ^metadata_csum,metadata_csum_seed */
++	if (!ext2fs_has_feature_metadata_csum(fs->super) &&
++	    ext2fs_has_feature_csum_seed(fs->super) &&
++	    fix_problem(ctx, PR_0_CSUM_SEED_WITHOUT_META_CSUM, &pctx)) {
++		ext2fs_clear_feature_csum_seed(fs->super);
++		fs->super->s_checksum_seed = 0;
++		ext2fs_mark_super_dirty(fs);
++	}
++
+ 	/* Is 64bit set and extents unset? */
+ 	if (ext2fs_has_feature_64bit(fs->super) &&
+ 	    !ext2fs_has_feature_extents(fs->super) &&
+-- 
+2.25.1
+

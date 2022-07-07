@@ -1,0 +1,48 @@
+From 3e343b8d9af349301a2acd6b4328fb5663deb60c Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sun, 9 Aug 2009 20:09:10 -0400
+Subject: [PATCH] e2freefrag: Fix to work correctly for file systems with 1kb
+ block sizes
+
+If the file system has a non-zero s_first_data_block, as is the case
+when the block size is 1kb, e2freefrag would incorrectly try to
+reference invalid data blocks in the block allocation bitmap.
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ misc/e2freefrag.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/misc/e2freefrag.c b/misc/e2freefrag.c
+index 274bf552..10a48ad0 100644
+--- a/misc/e2freefrag.c
++++ b/misc/e2freefrag.c
+@@ -79,6 +79,7 @@ void scan_block_bitmap(ext2_filsys fs, struct chunk_info *info)
+ 	unsigned long long chunk_num;
+ 	unsigned long last_chunk_size = 0;
+ 	unsigned long long chunk_start_blk = 0;
++	int used;
+ 
+ 	for (chunk_num = 0; chunk_num < chunks; chunk_num++) {
+ 		unsigned long long blk, num_blks;
+@@ -95,10 +96,13 @@ void scan_block_bitmap(ext2_filsys fs, struct chunk_info *info)
+ 		/* Initialize starting block for first chunk correctly else
+ 		 * there is a segfault when blocksize = 1024 in which case
+ 		 * block_map->start = 1 */
+-		for (blk = (chunk_num == 0 ? fs->super->s_first_data_block : 0);
+-		     blk < num_blks; blk++, chunk_start_blk++) {
+-			int used = ext2fs_fast_test_block_bitmap(fs->block_map,
+-							       chunk_start_blk);
++		for (blk = 0; blk < num_blks; blk++, chunk_start_blk++) {
++			if (chunk_num == 0 && blk == 0) {
++				blk = fs->super->s_first_data_block;
++				chunk_start_blk = blk;
++			}
++			used = ext2fs_fast_test_block_bitmap(fs->block_map,
++							     chunk_start_blk);
+ 			if (!used) {
+ 				last_chunk_size++;
+ 				chunk_free++;
+-- 
+2.25.1
+

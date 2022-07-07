@@ -1,0 +1,88 @@
+From 4b04fb30e01c7418331caa01ecf071bd55672f1a Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sat, 29 Dec 2012 00:53:16 -0500
+Subject: [PATCH] resize2fs: reserve all metadata blocks for flex_bg file
+ systems
+
+For flex_bg file systems, if we need to relocate an allocation bitmap
+or inode table, we need to make sure that all metadata blocks have
+been reserved, lest we end up overwriting a metadata block belonging
+to a different block group.
+
+This change fixes the following test case:
+
+rm -f foo.img; touch foo.img
+truncate -s 32G foo.img
+mke2fs -F -t ext4 -E resize=12582912 foo.img
+e2fsck -f foo.img
+truncate -s 64G foo.img
+./resize2fs foo.img
+e2fsck -fy foo.img
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ resize/resize2fs.c | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index c5d8a235..97026450 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -783,6 +783,7 @@ static errcode_t blocks_to_move(ext2_resize_t rfs)
+ 	ext2_filsys 	fs, old_fs;
+ 	ext2fs_block_bitmap	meta_bmap;
+ 	__u32		save_incompat_flag;
++	int		flex_bg;
+ 
+ 	fs = rfs->new_fs;
+ 	old_fs = rfs->old_fs;
+@@ -874,6 +875,8 @@ static errcode_t blocks_to_move(ext2_resize_t rfs)
+ 	 * gets interesting....
+ 	 */
+ 	meta_bg_size = EXT2_DESC_PER_BLOCK(fs->super);
++	flex_bg = fs->super->s_feature_incompat &
++		EXT4_FEATURE_INCOMPAT_FLEX_BG;
+ 	/* first reserve all of the existing fs meta blocks */
+ 	for (i = 0; i < max_groups; i++) {
+ 		has_super = ext2fs_bg_has_super(fs, i);
+@@ -903,18 +906,37 @@ static errcode_t blocks_to_move(ext2_resize_t rfs)
+ 		/*
+ 		 * Reserve the existing meta blocks that we know
+ 		 * aren't to be moved.
++		 *
++		 * For flex_bg file systems, in order to avoid
++		 * overwriting fs metadata (especially inode table
++		 * blocks) belonging to a different block group when
++		 * we are relocating the inode tables, we need to
++		 * reserve all existing fs metadata blocks.
+ 		 */
+ 		if (ext2fs_block_bitmap_loc(fs, i))
+ 			ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
+ 				 ext2fs_block_bitmap_loc(fs, i));
++		else if (flex_bg && i < old_fs->group_desc_count)
++			ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
++				 ext2fs_block_bitmap_loc(old_fs, i));
++
+ 		if (ext2fs_inode_bitmap_loc(fs, i))
+ 			ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
+ 				 ext2fs_inode_bitmap_loc(fs, i));
++		else if (flex_bg && i < old_fs->group_desc_count)
++			ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
++				 ext2fs_inode_bitmap_loc(old_fs, i));
++
+ 		if (ext2fs_inode_table_loc(fs, i))
+ 			for (blk = ext2fs_inode_table_loc(fs, i), j=0;
+ 			     j < fs->inode_blocks_per_group ; j++, blk++)
+ 				ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
+ 							 blk);
++		else if (flex_bg && i < old_fs->group_desc_count)
++			for (blk = ext2fs_inode_table_loc(old_fs, i), j=0;
++			     j < old_fs->inode_blocks_per_group ; j++, blk++)
++				ext2fs_mark_block_bitmap2(rfs->reserve_blocks,
++							  blk);
+ 
+ 		group_blk += rfs->new_fs->super->s_blocks_per_group;
+ 	}
+-- 
+2.25.1
+

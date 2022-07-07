@@ -1,0 +1,34 @@
+From 2ece839011f3074c2249dcfbf99945c93cc1927d Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Sun, 10 Aug 2014 18:40:21 -0400
+Subject: [PATCH] e2fsck: don't try to iterate blocks of an inline_data inode
+ when deallocating it
+
+Inodes with inline_data set do not have iterable blocks, so don't try
+to iterate the blocks, because that will just fail, causing e2fsck to
+abort.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass2.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/e2fsck/pass2.c b/e2fsck/pass2.c
+index 38bf37a3..d56b4c84 100644
+--- a/e2fsck/pass2.c
++++ b/e2fsck/pass2.c
+@@ -1441,6 +1441,10 @@ static void deallocate_inode(e2fsck_t ctx, ext2_ino_t ino, char* block_buf)
+ 	if (!ext2fs_inode_has_valid_blocks2(fs, &inode))
+ 		goto clear_inode;
+ 
++	/* Inline data inodes don't have blocks to iterate */
++	if (inode.i_flags & EXT4_INLINE_DATA_FL)
++		goto clear_inode;
++
+ 	if (LINUX_S_ISREG(inode.i_mode) &&
+ 	    ext2fs_needs_large_file_feature(EXT2_I_SIZE(&inode)))
+ 		ctx->large_files--;
+-- 
+2.25.1
+

@@ -1,0 +1,210 @@
+From e274cc39b91f5b0674eac922b22b29b857442194 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Wed, 28 Jan 2015 11:37:44 -0500
+Subject: [PATCH] e2fsck: improve the inline directory detector
+
+Strengthen the checks that guess if the inode we're looking at is an
+inline directory.  The current check sweeps up any inline inode if
+its length is a multiple of four; now we'll at least try to see if
+there's the beginning of a valid directory entry.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass1.c                      |  23 +++++++++++++++++++++++
+ tests/f_inlinedata_repair/expect.1  |  26 +++-----------------------
+ tests/f_inlinedata_repair/expect.2  |   2 +-
+ tests/f_inlinedir_detector/expect.1 |  20 ++++++++++++++++++++
+ tests/f_inlinedir_detector/expect.2 |   7 +++++++
+ tests/f_inlinedir_detector/image.gz | Bin 0 -> 2640 bytes
+ tests/f_inlinedir_detector/name     |   1 +
+ 7 files changed, 55 insertions(+), 24 deletions(-)
+ create mode 100644 tests/f_inlinedir_detector/expect.1
+ create mode 100644 tests/f_inlinedir_detector/expect.2
+ create mode 100644 tests/f_inlinedir_detector/image.gz
+ create mode 100644 tests/f_inlinedir_detector/name
+
+diff --git a/e2fsck/pass1.c b/e2fsck/pass1.c
+index 69a9ac16..9f22826b 100644
+--- a/e2fsck/pass1.c
++++ b/e2fsck/pass1.c
+@@ -537,6 +537,9 @@ static void check_is_really_dir(e2fsck_t ctx, struct problem_context *pctx,
+ 			 EXT4_FEATURE_INCOMPAT_INLINE_DATA);
+ 	if (inlinedata_fs && (inode->i_flags & EXT4_INLINE_DATA_FL)) {
+ 		size_t size;
++		__u32 dotdot;
++		unsigned int rec_len;
++		struct ext2_dir_entry de;
+ 
+ 		if (ext2fs_inline_data_size(ctx->fs, pctx->ino, &size))
+ 			return;
+@@ -546,6 +549,26 @@ static void check_is_really_dir(e2fsck_t ctx, struct problem_context *pctx,
+ 		 */
+ 		if (size & 3)
+ 			return;
++		/*
++		 * If the first 10 bytes don't look like a directory entry,
++		 * it's probably not a directory.
++		 */
++		memcpy(&dotdot, inode->i_block, sizeof(dotdot));
++		memcpy(&de, ((char *)inode->i_block) + EXT4_INLINE_DATA_DOTDOT_SIZE,
++		       EXT2_DIR_REC_LEN(0));
++		dotdot = ext2fs_le32_to_cpu(dotdot);
++		de.inode = ext2fs_le32_to_cpu(de.inode);
++		de.rec_len = ext2fs_le16_to_cpu(de.rec_len);
++		ext2fs_get_rec_len(ctx->fs, &de, &rec_len);
++		if (dotdot >= ctx->fs->super->s_inodes_count ||
++		    (dotdot < EXT2_FIRST_INO(ctx->fs->super) &&
++		     dotdot != EXT2_ROOT_INO) ||
++		    de.inode >= ctx->fs->super->s_inodes_count ||
++		    (de.inode < EXT2_FIRST_INO(ctx->fs->super) &&
++		     de.inode != 0) ||
++		    rec_len > EXT4_MIN_INLINE_DATA_SIZE -
++			      EXT4_INLINE_DATA_DOTDOT_SIZE)
++			return;
+ 		/* device files never have a "system.data" entry */
+ 		goto isdir;
+ 	} else if (extent_fs && (inode->i_flags & EXT4_EXTENTS_FL)) {
+diff --git a/tests/f_inlinedata_repair/expect.1 b/tests/f_inlinedata_repair/expect.1
+index faba192e..cc220ba1 100644
+--- a/tests/f_inlinedata_repair/expect.1
++++ b/tests/f_inlinedata_repair/expect.1
+@@ -8,11 +8,6 @@ Inode 24, i_size is 59, should be 60.  Fix? yes
+ Inode 28 is a unknown file type with mode 00 but it looks like it is really a directory.
+ Fix? yes
+ 
+-Inode 36 is a unknown file type with mode 00 but it looks like it is really a directory.
+-Fix? yes
+-
+-Inode 36, i_size is 5, should be 60.  Fix? yes
+-
+ Pass 2: Checking directory structure
+ Directory inode 20, block #0, offset 4: directory corrupted
+ Salvage? yes
+@@ -26,26 +21,16 @@ Salvage? yes
+ Directory inode 32, block #0, offset 4: directory corrupted
+ Salvage? yes
+ 
+-Entry '..' in ??? (36) has invalid inode #: 1633774699.
+-Clear? yes
+-
+-Directory inode 36, block #0, offset 4: directory corrupted
+-Salvage? yes
+-
+ Symlink /3 (inode #14) is invalid.
+ Clear? yes
+ 
+ Inode 38 (/B) has invalid mode (00).
+ Clear? yes
+ 
+-Entry 'A' in / (2) has an incorrect filetype (was 1, should be 2).
+-Fix? yes
++Inode 36 (/A) has invalid mode (00).
++Clear? yes
+ 
+ Pass 3: Checking directory connectivity
+-'..' in /A (36) is ??? (1633774699), should be / (2).
+-Fix? yes
+-
+-Error while adjusting inode count on inode 0
+ Pass 4: Checking reference counts
+ Unattached zero-length inode 22.  Clear? yes
+ 
+@@ -63,13 +48,8 @@ Unattached zero-length inode 34.  Clear? yes
+ 
+ Unattached zero-length inode 35.  Clear? yes
+ 
+-Inode 36 ref count is 1, should be 2.  Fix? yes
+-
+ Pass 5: Checking group summary information
+-Directories count wrong for group #0 (7, counted=8).
+-Fix? yes
+-
+ 
+ test_filesys: ***** FILE SYSTEM WAS MODIFIED *****
+-test_filesys: 28/128 files (0.0% non-contiguous), 18/512 blocks
++test_filesys: 27/128 files (0.0% non-contiguous), 18/512 blocks
+ Exit status is 1
+diff --git a/tests/f_inlinedata_repair/expect.2 b/tests/f_inlinedata_repair/expect.2
+index 519f21d7..2c400a57 100644
+--- a/tests/f_inlinedata_repair/expect.2
++++ b/tests/f_inlinedata_repair/expect.2
+@@ -3,5 +3,5 @@ Pass 2: Checking directory structure
+ Pass 3: Checking directory connectivity
+ Pass 4: Checking reference counts
+ Pass 5: Checking group summary information
+-test_filesys: 28/128 files (0.0% non-contiguous), 18/512 blocks
++test_filesys: 27/128 files (0.0% non-contiguous), 18/512 blocks
+ Exit status is 0
+diff --git a/tests/f_inlinedir_detector/expect.1 b/tests/f_inlinedir_detector/expect.1
+new file mode 100644
+index 00000000..72b75196
+--- /dev/null
++++ b/tests/f_inlinedir_detector/expect.1
+@@ -0,0 +1,20 @@
++Pass 1: Checking inodes, blocks, and sizes
++Special (device/socket/fifo) file (inode 12) has extents
++or inline-data flag set.  Clear? yes
++
++Special (device/socket/fifo) inode 12 has non-zero size.  Fix? yes
++
++Inode 13 is a named pipe but it looks like it is really a directory.
++Fix? yes
++
++Pass 2: Checking directory structure
++Entry 'moo' in / (2) has an incorrect filetype (was 1, should be 5).
++Fix? yes
++
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++
++test_filesys: ***** FILE SYSTEM WAS MODIFIED *****
++test_filesys: 13/128 files (0.0% non-contiguous), 17/512 blocks
++Exit status is 1
+diff --git a/tests/f_inlinedir_detector/expect.2 b/tests/f_inlinedir_detector/expect.2
+new file mode 100644
+index 00000000..06886a4b
+--- /dev/null
++++ b/tests/f_inlinedir_detector/expect.2
+@@ -0,0 +1,7 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++test_filesys: 13/128 files (0.0% non-contiguous), 17/512 blocks
++Exit status is 0
+diff --git a/tests/f_inlinedir_detector/image.gz b/tests/f_inlinedir_detector/image.gz
+new file mode 100644
+index 0000000000000000000000000000000000000000..34b4518849cd60d83890b5c69ff6a0aefaa54d57
+GIT binary patch
+literal 2640
+zcmb2|=3qD$xIcu6`R%Rq*)pLr3?IxlYj2y~vTS8L7pwfo71CL^ompDhH082Xu2x-J
+zdNY?<+C0T9M8L30!*$}L`UeZYT#5dA=fTO<wpEvAbG&lg(;;yG4S)2t+=Z$eGk^co
+zx&Qsy**!NOS{vKkJCnz8U~<-GolgSue6PNb<T#p8Yu6Fie%5jSlDcQlZVGJMe&26y
+z@b?Y-ufIFZ_VvgD!}+W7?Rg&_4#}VU>*J*>XC9f)zaRDc)u-$7v6T`#>;B)qdb&Q;
+ze}8fA%k%nvcYY<>ajPFrxp%)TUC#Qc$FG#+YvI8*Pp>gEJW$kFzTa3gt@`tSrI4!4
+zm-i{%skkZ0#K6$te*gIIRS(~vYJR_;mw|!dP36<~|0gS+e(v;tKf`3j^Ut6C`v0(2
+z?aHUJ<uCSKc$Kqfe@veC;z?`EtP-_!>&q8Rn*TcHix4YN=eHf5yKVkYud{pb2go~+
+zoP0|YNHd)O4<bnb8+LD-FP+H@)X^`S??8e^bfr7wf1kf&W8I^!`95Ae$k0~rf7Xrb
+ztAD4y?blhmQ`bB2X5(Xd$zs_%y$Aj$ex4kXGgrp=UuyHj_XmA@wirK_f1?@w^w0Ab
+zJAV4h@!e1U7yR<<gtF>?lmBnJ{WIQH;!xD8^h<^9hDK4o(~o}MSe>}EW9`&3W3jV&
+zg41WOJ?3VuyT$7D#*Jlm>$dy~6+CZx>+Q3mJv%P#y>Rozv8}&P)~Bibe|1^^+cdu=
+zGqU3U7wx>5d*|(Lsn@+%)3)!7yOPE2y?+1hEg!BuTD|$}(I3yU^N&<1%k_R$x)%Pp
+zW=*|7yp`DNyEmiOp7}p@%lm~TcM^Hl|DXGlKl-zE%|G|g_Fv}zx&M3n*URb05AXfN
+mjvg+f{Lv5?4S~@R7!85Z5Eu;sDusZ?U*<Usuk0BZ6c_*iEnI&9
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/f_inlinedir_detector/name b/tests/f_inlinedir_detector/name
+new file mode 100644
+index 00000000..3368af5a
+--- /dev/null
++++ b/tests/f_inlinedir_detector/name
+@@ -0,0 +1 @@
++detect inline dirs correctly
+-- 
+2.25.1
+

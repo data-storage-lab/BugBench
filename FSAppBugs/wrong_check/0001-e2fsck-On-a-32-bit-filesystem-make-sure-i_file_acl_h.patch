@@ -1,0 +1,156 @@
+From 911ec6261568ca56d2d7b9a15f00578c4d127cf4 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Thu, 23 Apr 2009 21:31:16 -0400
+Subject: [PATCH] e2fsck: On a 32-bit filesystem, make sure i_file_acl_high is
+ zero
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ e2fsck/pass1.c                 |   4 ++++
+ e2fsck/pass2.c                 |  11 +++++++++++
+ e2fsck/problem.c               |   5 +++++
+ e2fsck/problem.h               |   3 +++
+ tests/f_file_acl_high/expect.1 |  12 ++++++++++++
+ tests/f_file_acl_high/expect.2 |   7 +++++++
+ tests/f_file_acl_high/image.gz | Bin 0 -> 891 bytes
+ tests/f_file_acl_high/name     |   1 +
+ 8 files changed, 43 insertions(+)
+ create mode 100644 tests/f_file_acl_high/expect.1
+ create mode 100644 tests/f_file_acl_high/expect.2
+ create mode 100644 tests/f_file_acl_high/image.gz
+ create mode 100644 tests/f_file_acl_high/name
+
+diff --git a/e2fsck/pass1.c b/e2fsck/pass1.c
+index 04aeb26f..3b05cf25 100644
+--- a/e2fsck/pass1.c
++++ b/e2fsck/pass1.c
+@@ -935,6 +935,10 @@ void e2fsck_pass1(e2fsck_t ctx)
+ 		if (inode->i_faddr || frag || fsize ||
+ 		    (LINUX_S_ISDIR(inode->i_mode) && inode->i_dir_acl))
+ 			mark_inode_bad(ctx, ino);
++		if (!(fs->super->s_feature_incompat & 
++		      EXT4_FEATURE_INCOMPAT_64BIT) &&
++		    inode->osd2.linux2.l_i_file_acl_high != 0)
++			mark_inode_bad(ctx, ino);
+ 		if ((fs->super->s_creator_os == EXT2_OS_LINUX) &&
+ 		    !(fs->super->s_feature_ro_compat &
+ 		      EXT4_FEATURE_RO_COMPAT_HUGE_FILE) &&
+diff --git a/e2fsck/pass2.c b/e2fsck/pass2.c
+index 28badc9a..b33f596e 100644
+--- a/e2fsck/pass2.c
++++ b/e2fsck/pass2.c
+@@ -1353,6 +1353,17 @@ extern int e2fsck_process_bad_inode(e2fsck_t ctx, ext2_ino_t dir,
+ 		}
+ 	}
+ 
++	if (!(fs->super->s_feature_incompat & 
++	     EXT4_FEATURE_INCOMPAT_64BIT) &&
++	    inode.osd2.linux2.l_i_file_acl_high != 0) {
++		pctx.num = inode.osd2.linux2.l_i_file_acl_high;
++		if (fix_problem(ctx, PR_2_I_FILE_ACL_HI_ZERO, &pctx)) {
++			inode.osd2.linux2.l_i_file_acl_high = 0;
++			inode_modified++;
++		} else
++			not_fixed++;
++	}
++
+ 	if (inode.i_file_acl &&
+ 	    ((inode.i_file_acl < fs->super->s_first_data_block) ||
+ 	     (inode.i_file_acl >= fs->super->s_blocks_count))) {
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index 82934750..3ff17f0a 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -1286,6 +1286,11 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("@E references @i %Di found in @g %g's unused inodes area.\n"),
+ 	  PROMPT_FIX, PR_PREEN_OK },
+ 
++  	/* i_blocks_hi should be zero */
++	{ PR_2_I_FILE_ACL_HI_ZERO,
++	  N_("i_file_acl_hi @F %N, @s zero.\n"),
++	  PROMPT_CLEAR, 0 },
++
+ 	/* Pass 3 errors */
+ 
+ 	/* Pass 3: Checking directory connectivity */
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index 1cb054c4..ce8de767 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -768,6 +768,9 @@ struct problem_context {
+ /* Inode found in group unused inodes area */
+ #define PR_2_INOREF_IN_UNUSED		0x020047
+ 
++/* i_file_acl_hi should be zero */
++#define PR_2_I_FILE_ACL_HI_ZERO		0x020048
++
+ /*
+  * Pass 3 errors
+  */
+diff --git a/tests/f_file_acl_high/expect.1 b/tests/f_file_acl_high/expect.1
+new file mode 100644
+index 00000000..24d6e06d
+--- /dev/null
++++ b/tests/f_file_acl_high/expect.1
+@@ -0,0 +1,12 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++i_file_acl_hi for inode 12 (/motd) is 2, should be zero.
++Clear? yes
++
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++
++test_filesys: ***** FILE SYSTEM WAS MODIFIED *****
++test_filesys: 12/16 files (0.0% non-contiguous), 22/100 blocks
++Exit status is 1
+diff --git a/tests/f_file_acl_high/expect.2 b/tests/f_file_acl_high/expect.2
+new file mode 100644
+index 00000000..4c5476c4
+--- /dev/null
++++ b/tests/f_file_acl_high/expect.2
+@@ -0,0 +1,7 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++test_filesys: 12/16 files (0.0% non-contiguous), 22/100 blocks
++Exit status is 0
+diff --git a/tests/f_file_acl_high/image.gz b/tests/f_file_acl_high/image.gz
+new file mode 100644
+index 0000000000000000000000000000000000000000..6342d5833254771b70175e4b7c58e4d3257b2ae5
+GIT binary patch
+literal 891
+zcmb2|=HU1s`q7h#IWspgJ(c0@P2cY5Pzm-ADQR7%Yp+e`@)DOTNWZPp`}jg%iDA;g
+zQzcq&LtYvc7hjG!@ucm^GW`dO>R7|q#fTIt)-f;b@(5pdg<s)aw^(+eVvqVvpP6Ci
+zT31i~srw*rR6g%c@wu~=PDRT@n95eECq)_VP6|tUmUQYi_o1|7rT3@j&HbagEXFFp
+z>UVNw(D!3!=le|y%k%TvK5x7Fv#c{0XUu&0alQTC;#bF_*T4Vu;z4iklV;}kf5o$F
+z*IoVf>X!NG`*FKJ-~26aUblO1?cB+wHVmoJJ?%H%Y<X_}yI$|x>p9&_)<=#V`&=&n
+ze;4B$jo&d$H&$+||9|(?{+~Y|KfCnx@#FO}_EUh4sGRlj<Ll$;>fiac**sb-#ed*x
+z`Q!dyckal4um3sk@AvXI<(2YP@jAWn|Lv>)&(^fvy*97>%wof-FaMt1YuJC(Ms9O{
+zmHgL}GnOaK`^WvbUgG<G^`}8EpZ~u1|K0ui^M9I6_ig_DS^vGQ(c{+V@BD5=Yn=~y
+zZ#Qq|$}scqKmG-!E}PBY-Tb!ZN_OtMpYPM2pL$(+vFPc8|M}-@|JGNRZT{aVduab3
+zhyTpK<S+bh_{aXme!+jnzx*%i!9olbD|FNMUVJ*C<nzOf32knr3x5Uu{h*L3v+nxq
+z-d_*7&whD&tY)`dT!v1|=H>TzRxdWu`O5zAL`{ZF<ed13Ird_Hd$vhQef_m@g04*L
+zijXkt%oqHhxSOB-GDz9G#5!x~+5$~&tA!o)R@=>9i7qzSW2AHG>xG`h+t@Ru+A4SN
+z5UH<TYNY3-Z$4RR%cexb6W82ar+s&t$oJ^yt)B`@&Mw((dguwu+L9SZc3F5`lkN{Z
+zS+({}(lsg5-3#ZIUjAs}lxre$rEP9ReD+h%w@0HUeP7SBiF@v%sFgnIQ=h!vSYdQ^
+zY54hhadz9Ql77}iSjyguvno!@O#S+2VZf8b;wINy+D`U<TH0L}pKeX{+I;_gnrHFa
+z*=>2BgKS=B$<6Yd#MiEvzkRbx_vM*<BIyQE{puNg)5|oz?9MEn(bj#_KwC_E?xGj^
+l*RtkrxxKzm?dw&GjZsJQSQ)4Y8s<JMcYnXTnPCDW0|2bsxqtuw
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/f_file_acl_high/name b/tests/f_file_acl_high/name
+new file mode 100644
+index 00000000..fd54b064
+--- /dev/null
++++ b/tests/f_file_acl_high/name
+@@ -0,0 +1 @@
++i_file_acl_high should be zero
+-- 
+2.25.1
+
