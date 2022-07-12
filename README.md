@@ -21,7 +21,8 @@ Images Link: https://drive.google.com/drive/folders/1rgx6tB4iXAW8oomnIZTHGCeoUPJ
 ## FSAppBugs ##
 The "FSAppBugs""[On the Reproducibility of Bugs in File-System Aware Storage Applications]()", which was published in the 16th IEEE International Conference On Networking, Architecture, and Storage ([NAS](http://www.nas-conference.org/NAS-2022/)), 2022.
 
-Our dataset analysis was a guide for the application bug detection and debugging.
+By analyzing 59 bug cases from 4 representative applications in depth, we derive multiple insights in terms of general bug patterns, triggering
+conditions, and implications for building effective tools (e.g., bug detection, debugging, provenance tracking). We hope that our results could contribute to the development of robust FS-aware storage applications.
 
 ## Contact ##
 Om R. Gatla (ogatla@iastate.edu), 
