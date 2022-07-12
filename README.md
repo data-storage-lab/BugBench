@@ -8,7 +8,7 @@ About the name: BugBench<sup>k</sup>  was inspired by the classic paper "[BugBen
 
 The "PMBugs" folder contains the dataset studied in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel](https://dl.acm.org/doi/pdf/10.1145/3456727.3463783)", which was published in the Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021.
 
-XXX
+Our dataset classifies PM related bugs into various patterns so as to guide future PM bug detection tools.
 
 ## Benchmarking for Observability ##
 
