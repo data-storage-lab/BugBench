@@ -34,7 +34,7 @@ Our dataset was used to measure the debugging observability of two general debug
 Images Link: https://drive.google.com/drive/folders/1rgx6tB4iXAW8oomnIZTHGCeoUPJPup3R?usp=sharing
 
 ## FSAppBugs ##
-The "FSAppBugs""[On the Reproducibility of Bugs in File-System Aware Storage Applications]()", which was published in the 16th IEEE International Conference On Networking, Architecture, and Storage ([NAS](http://www.nas-conference.org/NAS-2022/)), 2022.
+The "FSAppBugs""[On the Reproducibility of Bugs in File-System Aware Storage Applications](https://ieeexplore.ieee.org/document/9925445)", which was published in the 16th IEEE International Conference On Networking, Architecture, and Storage ([NAS](http://www.nas-conference.org/NAS-2022/)), 2022.
 
 By analyzing 59 bug cases from 4 representative applications in depth, we derive multiple insights in terms of general bug patterns, triggering
 conditions, and implications for building effective tools (e.g., bug detection, debugging, provenance tracking). We hope that our results could contribute to the development of robust FS-aware storage applications.
