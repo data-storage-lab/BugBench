@@ -14,7 +14,9 @@ Proceedings of the 16th IEEE International Conference On Networking, Architectur
 Duo Zhang, Om R. Gatla, Wei Xu, and Mai Zheng,
 Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021.
 
-- "[Benchmarking for Observability: The Case of Diagnosing Storage Failures](https://www.sciencedirect.com/science/article/pii/S2772485921000065)", BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](https://www.benchcouncil.org/index.html)), 2021.
+- "[Benchmarking for Observability: The Case of Diagnosing Storage Failures](https://www.sciencedirect.com/science/article/pii/S2772485921000065)", 
+Duo Zhang and Mai Zheng,
+BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](https://www.benchcouncil.org/index.html)), 2021.
 
 ## Persistent Memory Bugs in the Linux Kernel ##
 
