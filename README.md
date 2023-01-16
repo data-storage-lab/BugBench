@@ -1,4 +1,4 @@
-# BugBench<sup>k</sub> 
+# BugBench<sup>k</sup> 
 
 This repository contains real-world bug cases curated by Data Storage Lab@ISU and studied in our research projects. Depending on the projects, we may perform a variety of analysis on the bug cases including characterization of bug patterns, reproducibility experiments, bug detection, failure diagnosis, etc. We hope that our efforts and the resulting datasets can inspire follow-up research in the community and help improve system reliability in general.
 
