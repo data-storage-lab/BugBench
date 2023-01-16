@@ -4,7 +4,7 @@ This repository contains real-world bug cases curated by Data Storage Lab@ISU an
 
 About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBench: Benchmarks for Evaluating Bug Detection Tools](http://opera.ucsd.edu/paper/63-lu.pdf)" by Shan Lu et. al. which characterizes a set of bugs in user-level applications. The "<sup>k</sup>" denotes the fact that the initial set of bug cases curated in BugBench<sup>k</sup> were kernel-level bugs.  
 
-BugBench<sup>k</sup>-related Publications:
+BugBench<sup>k</sup> Publications:
 
 - "[On the Reproducibility of Bugs in File-System Aware Storage Applications](https://ieeexplore.ieee.org/document/9925445)", 
 Duo Zhang, Tabassum Mahmud, Om Rameshwar Gatla, Runzhou Han, Yong Chen, and Mai Zheng,
