@@ -1,0 +1,54 @@
+From 8e2c84df20aa66ae9a6ee32831a9c622f4823118 Mon Sep 17 00:00:00 2001
+From: Brian Foster <bfoster@redhat.com>
+Date: Thu, 24 Apr 2014 16:00:52 +1000
+Subject: [PATCH 154808/735019] xfs: reserve v5 superblock read-only compat.
+ feature bit for finobt
+
+Reserve a v5 read-only compatibility feature bit for the finobt and
+create the xfs_sb_version_hasfinobt() helper to determine whether
+an fs has the feature enabled.
+
+The finobt does not change existing on-disk structures, but must
+remain consistent with the ialloc btree. Modifications from older
+kernels would violate that constrant. Therefore, we restrict older
+kernels to read-only mounts of finobt-enabled filesystems.
+
+Note that this does not yet enable the ability to rw mount a finobt
+fs (by setting the feature bit in the XFS_SB_FEAT_RO_COMPAT_ALL
+mask).
+
+Signed-off-by: Brian Foster <bfoster@redhat.com>
+Reviewed-by: Dave Chinner <dchinner@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ fs/xfs/xfs_sb.h | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/fs/xfs/xfs_sb.h b/fs/xfs/xfs_sb.h
+index f7b2fe77c5a5..7f53a858e85b 100644
+--- a/fs/xfs/xfs_sb.h
++++ b/fs/xfs/xfs_sb.h
+@@ -587,6 +587,7 @@ xfs_sb_has_compat_feature(
+ 	return (sbp->sb_features_compat & feature) != 0;
+ }
+ 
++#define XFS_SB_FEAT_RO_COMPAT_FINOBT   (1 << 0)		/* free inode btree */
+ #define XFS_SB_FEAT_RO_COMPAT_ALL 0
+ #define XFS_SB_FEAT_RO_COMPAT_UNKNOWN	~XFS_SB_FEAT_RO_COMPAT_ALL
+ static inline bool
+@@ -641,6 +642,12 @@ static inline int xfs_sb_version_hasftype(struct xfs_sb *sbp)
+ 		 (sbp->sb_features2 & XFS_SB_VERSION2_FTYPE));
+ }
+ 
++static inline int xfs_sb_version_hasfinobt(xfs_sb_t *sbp)
++{
++	return (XFS_SB_VERSION_NUM(sbp) == XFS_SB_VERSION_5) &&
++		(sbp->sb_features_ro_compat & XFS_SB_FEAT_RO_COMPAT_FINOBT);
++}
++
+ /*
+  * end of superblock version macros
+  */
+-- 
+2.17.1
+
