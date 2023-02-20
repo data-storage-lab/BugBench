@@ -1,0 +1,182 @@
+From db3d8718be6ad3bdd252b242827fa54914b8ec2e Mon Sep 17 00:00:00 2001
+From: Andreas Dilger <andreas.dilger@intel.com>
+Date: Fri, 13 Nov 2015 18:10:27 -0700
+Subject: [PATCH 5137/6469] e2fsck: skip quota update when interrupted
+
+There is a bug in how e2fsck handles being interrupted by CTRL-C.
+If CTRL-C is pressed to kill e2fsck rather than e.g. kill -9, then
+the interrupt handler sets E2F_FLAG_CANCEL in the context but doesn't
+actually kill the process.  Instead, e2fsck_pass1() checks this flag
+before processing the next inode.
+
+If a filesystem is running in fix mode (e2fsck -fy) is interrupted,
+and the quota feature is enabled, then the quota file will still be
+written to disk even though the inode scan was not complete and the
+quota information is totally inaccurate.  Even worse, if the Pass 1
+inode and block scan was not finished, then the in-memory block
+bitmaps (which are used for block allocation during e2fsck) are also
+invalid, so any blocks allocated to the quota files may corrupt other
+files if those blocks were actually used.
+
+  e2fsck 1.42.13.wc3 (28-Aug-2015)
+  Pass 1: Checking inodes, blocks, and sizes
+  ^C[QUOTA WARNING] Usage inconsistent for ID 0:
+      actual (6455296, 168) != expected (8568832, 231)
+  [QUOTA WARNING] Usage inconsistent for ID 695:
+      actual (614932320256, 63981) != expected (2102405386240, 176432)
+  Update quota info for quota type 0? yes
+
+  [QUOTA WARNING] Usage inconsistent for ID 0:
+      actual (6455296, 168) != expected (8568832, 231)
+  [QUOTA WARNING] Usage inconsistent for ID 538:
+      actual (614932320256, 63981) != expected (2102405386240, 176432)
+  Update quota info for quota type 1? yes
+
+  myth-OST0001: e2fsck canceled.
+  myth-OST0001: ***** FILE SYSTEM WAS MODIFIED *****
+
+There may be a desire to flush out modified inodes and such that have
+been repaired, so that restarting an interrupted e2fsck will make
+progress, but the quota file update is plain wrong unless at least
+pass1 has finished, and the journal recreation is also dangerous if
+the block bitmaps have not been fully updated.
+
+Signed-off-by: Andreas Dilger <andreas.dilger@intel.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/e2fsck.c |  2 --
+ e2fsck/e2fsck.h |  4 ++--
+ e2fsck/pass1.c  |  4 +++-
+ e2fsck/pass2.c  | 10 +++++-----
+ e2fsck/unix.c   | 18 ++++++++++--------
+ 5 files changed, 20 insertions(+), 18 deletions(-)
+
+diff --git a/e2fsck/e2fsck.c b/e2fsck/e2fsck.c
+index 0ec15404..2002dc00 100644
+--- a/e2fsck/e2fsck.c
++++ b/e2fsck/e2fsck.c
+@@ -203,8 +203,6 @@ static pass_t e2fsck_passes[] = {
+ 	e2fsck_pass1, e2fsck_pass2, e2fsck_pass3, e2fsck_pass4,
+ 	e2fsck_pass5, 0 };
+ 
+-#define E2F_FLAG_RUN_RETURN	(E2F_FLAG_SIGNAL_MASK|E2F_FLAG_RESTART)
+-
+ int e2fsck_run(e2fsck_t ctx)
+ {
+ 	int	i;
+diff --git a/e2fsck/e2fsck.h b/e2fsck/e2fsck.h
+index f904026f..810030e2 100644
+--- a/e2fsck/e2fsck.h
++++ b/e2fsck/e2fsck.h
+@@ -173,10 +173,10 @@ struct resource_track {
+  */
+ #define E2F_FLAG_ABORT		0x0001 /* Abort signaled */
+ #define E2F_FLAG_CANCEL		0x0002 /* Cancel signaled */
+-#define E2F_FLAG_SIGNAL_MASK	0x0003
++#define E2F_FLAG_SIGNAL_MASK	(E2F_FLAG_ABORT | E2F_FLAG_CANCEL)
+ #define E2F_FLAG_RESTART	0x0004 /* Restart signaled */
++#define E2F_FLAG_RUN_RETURN	(E2F_FLAG_SIGNAL_MASK | E2F_FLAG_RESTART)
+ #define E2F_FLAG_RESTART_LATER	0x0008 /* Restart after all iterations done */
+-
+ #define E2F_FLAG_SETJMP_OK	0x0010 /* Setjmp valid for abort */
+ 
+ #define E2F_FLAG_PROG_BAR	0x0020 /* Progress bar on screen */
+diff --git a/e2fsck/pass1.c b/e2fsck/pass1.c
+index 3bf481f3..ac3ea4eb 100644
+--- a/e2fsck/pass1.c
++++ b/e2fsck/pass1.c
+@@ -766,7 +766,7 @@ void e2fsck_pass1(e2fsck_t ctx)
+ 							  inode, inode_size);
+ 		ehandler_operation(old_op);
+ 		if (ctx->flags & E2F_FLAG_SIGNAL_MASK)
+-			return;
++			goto endit;
+ 		if (pctx.errcode == EXT2_ET_BAD_BLOCK_IN_INODE_TABLE) {
+ 			if (!ctx->inode_bb_map)
+ 				alloc_bb_map(ctx);
+@@ -1277,6 +1277,8 @@ endit:
+ 
+ 	if ((ctx->flags & E2F_FLAG_SIGNAL_MASK) == 0)
+ 		print_resource_track(ctx, _("Pass 1"), &rtrack, ctx->fs->io);
++	else
++		ctx->invalid_bitmaps++;
+ }
+ 
+ /*
+diff --git a/e2fsck/pass2.c b/e2fsck/pass2.c
+index 4acddaee..b8f7e33a 100644
+--- a/e2fsck/pass2.c
++++ b/e2fsck/pass2.c
+@@ -148,14 +148,14 @@ void e2fsck_pass2(e2fsck_t ctx)
+ 
+ 	cd.pctx.errcode = ext2fs_dblist_iterate2(fs->dblist, check_dir_block,
+ 						 &cd);
+-	if (ctx->flags & E2F_FLAG_SIGNAL_MASK || ctx->flags & E2F_FLAG_RESTART)
+-		return;
+-
+ 	if (ctx->flags & E2F_FLAG_RESTART_LATER) {
+ 		ctx->flags |= E2F_FLAG_RESTART;
+-		return;
++		ctx->flags &= ~E2F_FLAG_RESTART_LATER;
+ 	}
+ 
++	if (ctx->flags & E2F_FLAG_RUN_RETURN)
++		return;
++
+ 	if (cd.pctx.errcode) {
+ 		fix_problem(ctx, PR_2_DBLIST_ITERATE, &cd.pctx);
+ 		ctx->flags |= E2F_FLAG_ABORT;
+@@ -739,7 +739,7 @@ static int check_dir_block(ext2_filsys fs,
+ 	buf = cd->buf;
+ 	ctx = cd->ctx;
+ 
+-	if (ctx->flags & E2F_FLAG_SIGNAL_MASK || ctx->flags & E2F_FLAG_RESTART)
++	if (ctx->flags & E2F_FLAG_RUN_RETURN)
+ 		return DIRENT_ABORT;
+ 
+ 	if (ctx->progress && (ctx->progress)(ctx, 2, cd->count++, cd->max))
+diff --git a/e2fsck/unix.c b/e2fsck/unix.c
+index 10036e76..9d9ba04f 100644
+--- a/e2fsck/unix.c
++++ b/e2fsck/unix.c
+@@ -1667,8 +1667,15 @@ print_unsupp_features:
+ 	}
+ no_journal:
+ 
+-	if (ctx->qctx) {
++	if (run_result & E2F_FLAG_ABORT) {
++		fatal_error(ctx, _("aborted"));
++	} else if (run_result & E2F_FLAG_CANCEL) {
++		log_out(ctx, _("%s: e2fsck canceled.\n"), ctx->device_name ?
++			ctx->device_name : ctx->filesystem_name);
++		exit_value |= FSCK_CANCELED;
++	} else if (ctx->qctx && !ctx->invalid_bitmaps) {
+ 		int i, needs_writeout;
++
+ 		for (i = 0; i < MAXQUOTAS; i++) {
+ 			if (qtype != -1 && qtype != i)
+ 				continue;
+@@ -1695,18 +1702,13 @@ no_journal:
+ 		ext2fs_close_free(&ctx->fs);
+ 		goto restart;
+ 	}
+-	if (run_result & E2F_FLAG_ABORT)
+-		fatal_error(ctx, _("aborted"));
+ 
+ #ifdef MTRACE
+ 	mtrace_print("Cleanup");
+ #endif
+ 	was_changed = ext2fs_test_changed(fs);
+-	if (run_result & E2F_FLAG_CANCEL) {
+-		log_out(ctx, _("%s: e2fsck canceled.\n"), ctx->device_name ?
+-			ctx->device_name : ctx->filesystem_name);
+-		exit_value |= FSCK_CANCELED;
+-	} else if (!(ctx->options & E2F_OPT_READONLY)) {
++	if (!(ctx->flags & E2F_FLAG_RUN_RETURN) &&
++	    !(ctx->options & E2F_OPT_READONLY)) {
+ 		if (ext2fs_test_valid(fs)) {
+ 			if (!(sb->s_state & EXT2_VALID_FS))
+ 				exit_value |= FSCK_NONDESTRUCT;
+-- 
+2.17.1
+

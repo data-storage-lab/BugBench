@@ -1,0 +1,68 @@
+From 10c5c5e564206197384e794caca3baca6a970c63 Mon Sep 17 00:00:00 2001
+From: Artem Blagodarenko <artem.blagodarenko@gmail.com>
+Date: Fri, 14 Jun 2019 17:42:37 +0300
+Subject: [PATCH 6088/6469] e2fsck: correctly handle inline directories when
+ large_dir is enabled.
+
+Historically, e2fsck has required that directories not contain holes.
+(In fact, as of this writing, ext4 still requires this to be the
+case.)  Commit ae9efd05a98 ("e2fsck: 3 level hash tree directory
+optimization") removed this requirement if the large_dir feature is
+enabled; however, the way it was done caused it to incorrectly handle
+inline directories.
+
+To reproduce the problem fixed by this commit:
+
+truncate -s 100000000 ext4.img
+misc/mke2fs -t ext4 -I 512 -O 'inline_data,large_dir' ext4.img
+mkdir m
+sudo mount ext4.img m
+mkdir m/aa
+sudo umount m
+e2fsck/e2fsck -f -n ext4.img
+
+The last command gives this output:
+
+[root@localhost e2fsprogs-kernel]# e2fsck/e2fsck -f -n ext4-2.img
+e2fsck 1.45.2 (27-May-2019)
+Pass 1: Checking inodes, blocks, and sizes
+Pass 2: Checking directory structure
+Pass 3: Checking directory connectivity
+'..' in /aa (12) is <The NULL inode> (0), should be / (2).
+Fix? no
+
+Pass 4: Checking reference counts
+Inode 2 ref count is 4, should be 3.  Fix? no
+
+Inode 12 ref count is 2, should be 1.  Fix? no
+
+Pass 5: Checking group summary information
+
+ext4-2.img: ********** WARNING: Filesystem still has errors **********
+
+ext4-2.img: 12/24384 files (0.0% non-contiguous), 17874/97656 blocks
+
+Reported-by: Rasmus Villemoes <linux@rasmusvillemoes.dk>
+Signed-off-by: Artem Blagodarenko <c17828@cray.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/pass2.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/e2fsck/pass2.c b/e2fsck/pass2.c
+index a7d9c47d..8b40e93d 100644
+--- a/e2fsck/pass2.c
++++ b/e2fsck/pass2.c
+@@ -980,7 +980,8 @@ static int check_dir_block(ext2_filsys fs,
+ 	 * very large and then the files are deleted. For now, all that is
+ 	 * needed is to avoid e2fsck filling in these holes as part of
+ 	 * feature flag. */
+-	if (db->blk == 0 && ext2fs_has_feature_largedir(fs->super))
++	if (db->blk == 0 && ext2fs_has_feature_largedir(fs->super) &&
++	    !ext2fs_has_feature_inline_data(fs->super))
+ 		return 0;
+ 
+ 	if (db->blk == 0 && !inline_data_size) {
+-- 
+2.17.1
+

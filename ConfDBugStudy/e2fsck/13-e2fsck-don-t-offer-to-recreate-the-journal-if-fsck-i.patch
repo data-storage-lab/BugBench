@@ -1,0 +1,34 @@
+From c4c93e2d74297b5c8eaf9611937e6797997c1f79 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Tue, 22 Jul 2014 13:54:54 -0400
+Subject: [PATCH 4681/6469] e2fsck: don't offer to recreate the journal if fsck
+ is aborting due to bad block bitmaps
+
+If e2fsck knows the bitmaps are bad at the exit (probably because they
+were bad at the start and have not been fixed), don't offer to
+recreate the journal because doing so causes e2fsck to abort a second
+time.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/unix.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/e2fsck/unix.c b/e2fsck/unix.c
+index 03848c77..8d1bdf3e 100644
+--- a/e2fsck/unix.c
++++ b/e2fsck/unix.c
+@@ -1636,7 +1636,8 @@ print_unsupp_features:
+ 	run_result = e2fsck_run(ctx);
+ 	e2fsck_clear_progbar(ctx);
+ 
+-	if (ctx->flags & E2F_FLAG_JOURNAL_INODE) {
++	if (!ctx->invalid_bitmaps &&
++	    (ctx->flags & E2F_FLAG_JOURNAL_INODE)) {
+ 		if (fix_problem(ctx, PR_6_RECREATE_JOURNAL, &pctx)) {
+ 			if (journal_size < 1024)
+ 				journal_size = ext2fs_default_journal_size(ext2fs_blocks_count(fs->super));
+-- 
+2.17.1
+

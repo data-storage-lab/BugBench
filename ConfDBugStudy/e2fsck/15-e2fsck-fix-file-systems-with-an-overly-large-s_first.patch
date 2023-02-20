@@ -1,0 +1,69 @@
+From 7a4352dccd18928ffddd188cc927f4983ba80f72 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sat, 9 Aug 2014 12:31:04 -0400
+Subject: [PATCH 4764/6469] e2fsck: fix file systems with an overly large
+ s_first_meta_bg
+
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/problem.c |  5 +++++
+ e2fsck/problem.h |  3 +++
+ e2fsck/super.c   | 12 ++++++++++++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/e2fsck/problem.c b/e2fsck/problem.c
+index 6d9b1af8..57c2e39e 100644
+--- a/e2fsck/problem.c
++++ b/e2fsck/problem.c
+@@ -440,6 +440,11 @@ static struct e2fsck_problem problem_table[] = {
+ 	  N_("@S 64bit filesystems needs extents to access the whole disk.  "),
+ 	  PROMPT_FIX, PR_PREEN_OK | PR_NO_OK},
+ 
++	/* The first_meta_bg is too big */
++	{ PR_0_FIRST_META_BG_TOO_BIG,
++	  N_("First_meta_bg is too big.  (%N, max value %g).  "),
++	  PROMPT_CLEAR, 0 },
++
+ 	/* Pass 1 errors */
+ 
+ 	/* Pass 1: Checking inodes, blocks, and sizes */
+diff --git a/e2fsck/problem.h b/e2fsck/problem.h
+index d673a4ea..3426a22a 100644
+--- a/e2fsck/problem.h
++++ b/e2fsck/problem.h
+@@ -252,6 +252,9 @@ struct problem_context {
+ /* 64bit is set but extents are not set. */
+ #define PR_0_64BIT_WITHOUT_EXTENTS		0x000048
+ 
++/* The first_meta_bg is too big */
++#define PR_0_FIRST_META_BG_TOO_BIG		0x000049
++
+ /*
+  * Pass 1 errors
+  */
+diff --git a/e2fsck/super.c b/e2fsck/super.c
+index 8d468e63..768316ab 100644
+--- a/e2fsck/super.c
++++ b/e2fsck/super.c
+@@ -591,6 +591,18 @@ void check_super_block(e2fsck_t ctx)
+ 		ext2fs_mark_super_dirty(fs);
+ 	}
+ 
++	if ((fs->super->s_feature_incompat & EXT2_FEATURE_INCOMPAT_META_BG) &&
++	    (fs->super->s_first_meta_bg > fs->desc_blocks)) {
++		pctx.group = fs->desc_blocks;
++		pctx.num = fs->super->s_first_meta_bg;
++		if (fix_problem(ctx, PR_0_FIRST_META_BG_TOO_BIG, &pctx)) {
++			fs->super->s_feature_incompat &=
++				~EXT2_FEATURE_INCOMPAT_META_BG;
++			fs->super->s_first_meta_bg = 0;
++			ext2fs_mark_super_dirty(fs);
++		}
++	}
++
+ 	/*
+ 	 * Verify the group descriptors....
+ 	 */
+-- 
+2.17.1
+

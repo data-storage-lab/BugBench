@@ -1,0 +1,521 @@
+From 19961cd0003564c63c33ec14e69dfec6d81a2238 Mon Sep 17 00:00:00 2001
+From: Andreas Dilger <andreas.dilger@intel.com>
+Date: Mon, 30 Nov 2015 15:26:35 -0500
+Subject: [PATCH 5145/6469] e2fsck: fix e2fsck -fD directory truncation
+
+When an extent-mapped directory is compacted by "e2fsck -fD" and
+frees enough leaf blocks that it loses an extent tree index block,
+the old e2fsck_rehash_dir->ext2fs_block_iterate3->write_dir_block()
+code would not free the extent block, which would result in the
+extent tree becoming corrupted when it is written out.
+
+    Pass 1: Checking inodes, blocks, and sizes
+    Inode 17825800, end of extent exceeds allowed value
+            (logical block 710, physical block 570459684, len 1019)
+
+This results in loss of a whole index block of directory leaf blocks
+and maybe thousands or millions of files in lost+found.
+
+Fix e2fsck_rehash_dir() to call ext2fs_punch() to free the blocks
+at the end of the directory instead of trying to handle this itself
+while writing out the directory.  That properly handles all of the
+cases of updating the extent tree as well as accounting for blocks
+that are released (both leaf blocks and index blocks).
+
+Add a test case for compacting the directory to be smaller than the
+index block that originally caused the corruption.
+
+Signed-off-by: Andreas Dilger <andreas.dilger@intel.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/rehash.c               |  72 ++++++++++++++++++----------------
+ tests/f_extent_htree/expect.1 |  29 ++++++++++++++
+ tests/f_extent_htree/expect.2 |   7 ++++
+ tests/f_extent_htree/image.gz | Bin 0 -> 10101 bytes
+ tests/f_extent_htree/name     |   1 +
+ tests/f_extent_htree/script   |  69 ++++++++++++++++++++++++++++++++
+ tests/f_h_badnode/expect.1    |   2 +-
+ tests/f_h_badnode/expect.2    |   2 +-
+ 8 files changed, 147 insertions(+), 35 deletions(-)
+ create mode 100644 tests/f_extent_htree/expect.1
+ create mode 100644 tests/f_extent_htree/expect.2
+ create mode 100644 tests/f_extent_htree/image.gz
+ create mode 100644 tests/f_extent_htree/name
+ create mode 100644 tests/f_extent_htree/script
+
+diff --git a/e2fsck/rehash.c b/e2fsck/rehash.c
+index 8ff48838..52d99a3c 100644
+--- a/e2fsck/rehash.c
++++ b/e2fsck/rehash.c
+@@ -52,10 +52,13 @@
+ #include "e2fsck.h"
+ #include "problem.h"
+ 
++#undef REHASH_DEBUG
++
+ struct fill_dir_struct {
+ 	char *buf;
+ 	struct ext2_inode *inode;
+ 	errcode_t err;
++	ext2_ino_t ino;
+ 	e2fsck_t ctx;
+ 	struct hash_entry *harray;
+ 	int max_array, num_array;
+@@ -625,8 +628,8 @@ static errcode_t calculate_tree(ext2_filsys fs,
+ struct write_dir_struct {
+ 	struct out_dir *outdir;
+ 	errcode_t	err;
++	ext2_ino_t	ino;
+ 	e2fsck_t	ctx;
+-	blk64_t		cleared;
+ };
+ 
+ /*
+@@ -643,28 +646,35 @@ static int write_dir_block(ext2_filsys fs,
+ 	blk64_t	blk;
+ 	char	*dir;
+ 
+-	if (*block_nr == 0)
++#ifdef REHASH_DEBUG
++	printf("%u: write_dir_block %lld:%lld", wd->ino, blockcnt, *block_nr);
++#endif
++	if (*block_nr == 0) {
++#ifdef REHASH_DEBUG
++		printf(" - skip\n");
++#endif
+ 		return 0;
++	}
++	/* Don't free blocks at the end of the directory, they will be
++	 * truncated by the caller. */
+ 	if (blockcnt >= wd->outdir->num) {
+-		e2fsck_read_bitmaps(wd->ctx);
+-		blk = *block_nr;
+-		/*
+-		 * In theory, we only release blocks from the end of the
+-		 * directory file, so it's fine to clobber a whole cluster at
+-		 * once.
+-		 */
+-		if (blk % EXT2FS_CLUSTER_RATIO(fs) == 0) {
+-			ext2fs_block_alloc_stats2(fs, blk, -1);
+-			wd->cleared++;
+-		}
+-		*block_nr = 0;
+-		return BLOCK_CHANGED;
++#ifdef REHASH_DEBUG
++		printf(" - not freed\n");
++#endif
++		return 0;
+ 	}
+-	if (blockcnt < 0)
++	if (blockcnt < 0) {
++#ifdef REHASH_DEBUG
++		printf(" - skip\n");
++#endif
+ 		return 0;
++	}
+ 
+ 	dir = wd->outdir->buf + (blockcnt * fs->blocksize);
+ 	wd->err = ext2fs_write_dir_block3(fs, *block_nr, dir, 0);
++#ifdef REHASH_DEBUG
++	printf(" - write (%d)\n", wd->err);
++#endif
+ 	if (wd->err)
+ 		return BLOCK_ABORT;
+ 	return 0;
+@@ -684,10 +694,10 @@ static errcode_t write_directory(e2fsck_t ctx, ext2_filsys fs,
+ 
+ 	wd.outdir = outdir;
+ 	wd.err = 0;
++	wd.ino = ino;
+ 	wd.ctx = ctx;
+-	wd.cleared = 0;
+ 
+-	retval = ext2fs_block_iterate3(fs, ino, 0, 0,
++	retval = ext2fs_block_iterate3(fs, ino, 0, NULL,
+ 				       write_dir_block, &wd);
+ 	if (retval)
+ 		return retval;
+@@ -699,14 +709,17 @@ static errcode_t write_directory(e2fsck_t ctx, ext2_filsys fs,
+ 		inode.i_flags &= ~EXT2_INDEX_FL;
+ 	else
+ 		inode.i_flags |= EXT2_INDEX_FL;
+-	retval = ext2fs_inode_size_set(fs, &inode,
+-				       outdir->num * fs->blocksize);
++#ifdef REHASH_DEBUG
++	printf("%u: set inode size to %u blocks = %u bytes\n",
++	       ino, outdir->num, outdir->num * fs->blocksize);
++#endif
++	retval = ext2fs_inode_size_set(fs, &inode, (ext2_off64_t)outdir->num *
++						   fs->blocksize);
+ 	if (retval)
+ 		return retval;
+-	ext2fs_iblk_sub_blocks(fs, &inode, wd.cleared);
+-	e2fsck_write_inode(ctx, ino, &inode, "rehash_dir");
+ 
+-	return 0;
++	/* ext2fs_punch() calls ext2fs_write_inode() which writes the size */
++	return ext2fs_punch(fs, ino, &inode, NULL, outdir->num, ~0ULL);
+ }
+ 
+ errcode_t e2fsck_rehash_dir(e2fsck_t ctx, ext2_ino_t ino)
+@@ -715,32 +728,25 @@ errcode_t e2fsck_rehash_dir(e2fsck_t ctx, ext2_ino_t ino)
+ 	errcode_t		retval;
+ 	struct ext2_inode 	inode;
+ 	char			*dir_buf = 0;
+-	struct fill_dir_struct	fd;
+-	struct out_dir		outdir;
++	struct fill_dir_struct	fd = { NULL };
++	struct out_dir		outdir = { 0 };
+ 
+-	outdir.max = outdir.num = 0;
+-	outdir.buf = 0;
+-	outdir.hashes = 0;
+ 	e2fsck_read_inode(ctx, ino, &inode, "rehash_dir");
+ 
+ 	retval = ENOMEM;
+-	fd.harray = 0;
+ 	dir_buf = malloc(inode.i_size);
+ 	if (!dir_buf)
+ 		goto errout;
+ 
+ 	fd.max_array = inode.i_size / 32;
+-	fd.num_array = 0;
+ 	fd.harray = malloc(fd.max_array * sizeof(struct hash_entry));
+ 	if (!fd.harray)
+ 		goto errout;
+ 
++	fd.ino = ino;
+ 	fd.ctx = ctx;
+ 	fd.buf = dir_buf;
+ 	fd.inode = &inode;
+-	fd.err = 0;
+-	fd.dir_size = 0;
+-	fd.compress = 0;
+ 	if (!(fs->super->s_feature_compat & EXT2_FEATURE_COMPAT_DIR_INDEX) ||
+ 	    (inode.i_size / fs->blocksize) < 2)
+ 		fd.compress = 1;
+diff --git a/tests/f_extent_htree/expect.1 b/tests/f_extent_htree/expect.1
+new file mode 100644
+index 00000000..223ca697
+--- /dev/null
++++ b/tests/f_extent_htree/expect.1
+@@ -0,0 +1,29 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 3A: Optimizing directories
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++
++test_filesys: ***** FILE SYSTEM WAS MODIFIED *****
++
++         352 inodes used (41.12%, out of 856)
++           0 non-contiguous files (0.0%)
++           1 non-contiguous directory (0.3%)
++             # of inodes with ind/dind/tind blocks: 0/0/0
++             Extent depth histogram: 342/1
++         586 blocks used (68.94%, out of 850)
++           0 bad blocks
++           0 large files
++
++         340 regular files
++           3 directories
++           0 character device files
++           0 block device files
++           0 fifos
++           0 links
++           0 symbolic links (0 fast symbolic links)
++           0 sockets
++------------
++         343 files
++Exit status is 1
+diff --git a/tests/f_extent_htree/expect.2 b/tests/f_extent_htree/expect.2
+new file mode 100644
+index 00000000..860b491e
+--- /dev/null
++++ b/tests/f_extent_htree/expect.2
+@@ -0,0 +1,7 @@
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++test_filesys: 352/856 files (0.3% non-contiguous), 586/850 blocks
++Exit status is 0
+diff --git a/tests/f_extent_htree/image.gz b/tests/f_extent_htree/image.gz
+new file mode 100644
+index 0000000000000000000000000000000000000000..284207efb12a04136c9f26c33f2197fed97cbd99
+GIT binary patch
+literal 10101
+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
+z3pM!X&MgNyMQWn~x%0A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
+S1hD`^CoQ(LFj+Co<o^JlLF&8!
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/f_extent_htree/name b/tests/f_extent_htree/name
+new file mode 100644
+index 00000000..fc3812d5
+--- /dev/null
++++ b/tests/f_extent_htree/name
+@@ -0,0 +1 @@
++htree extent compression
+diff --git a/tests/f_extent_htree/script b/tests/f_extent_htree/script
+new file mode 100644
+index 00000000..60854c65
+--- /dev/null
++++ b/tests/f_extent_htree/script
+@@ -0,0 +1,69 @@
++#!/bin/bash
++
++FSCK_OPT="-fyvD"
++. $cmd_dir/run_e2fsck
++
++exit $?
++# This script depends on "mke2fs -d", which is only in master and not maint,
++# to populate the file directory tree poorly (namely that there are no
++# contiguous blocks in the directory leaf and the extent tree is large).
++
++# Once the "mke2fs -d" option is available on the "maint" branch, the
++# above few lines should be deleted, along with the "image.gz" file.
++
++TMPDIR=${TMPDIR:-"/tmp"}
++OUT=$test_name.log
++
++FSCK_OPT="-fyvD"
++SKIP_GUNZIP="true"
++
++NAMELEN=250
++SRC=$TMPDIR/$test_name.tmp
++SUB=subdir
++BASE=$SRC/$SUB/$(yes | tr -d '\n' | dd bs=$NAMELEN count=1 2> /dev/null)
++TMPFILE=${TMPFILE:-"$TMPDIR/image"}
++BSIZE=1024
++
++> $OUT
++mkdir -p $SRC/$SUB
++# calculate the number of files needed to create the directory extent tree
++# deep enough to exceed the in-inode index and spill into an index block.
++#
++# dirents per block * extents per block * (index blocks > i_blocks)
++NUM=$(((BSIZE / (NAMELEN + 8)) * (BSIZE / 12) * 2))
++# Create source files. Unfortunately hard links will be copied as links,
++# and blocks with only NULs will be turned into holes.
++if [ ! -f $BASE.1 ]; then
++	for N in $(seq $NUM); do
++		echo "foo" > $BASE.$N
++	done >> $OUT
++fi
++
++# make filesystem with enough inodes and blocks to hold all the test files
++> $TMPFILE
++NUM=$((NUM * 5 / 3))
++echo "mke2fs -b $BSIZE -O dir_index,extent -d$SRC -N$NUM $TMPFILE $NUM" >> $OUT
++$MKE2FS -b $BSIZE -O dir_index,extent -d$SRC -N$NUM $TMPFILE $NUM >> $OUT 2>&1
++rm -r $SRC
++
++# Run e2fsck to convert dir to htree before deleting the files, as mke2fs
++# doesn't do this.  Run second e2fsck to verify there is no corruption yet.
++(
++	EXP1=$test_dir/expect.pre.1
++	EXP2=$test_dir/expect.pre.2
++	OUT1=$test_name.pre.1.log
++	OUT2=$test_name.pre.2.log
++	DESCRIPTION="$(cat $test_dir/name) setup"
++	. $cmd_dir/run_e2fsck
++)
++
++# generate a list of filenames for debugfs to delete, one from each leaf block
++DELETE_LIST=$TMPDIR/delete.$$
++$DEBUGFS -c -R "htree subdir" $TMPFILE 2>> $OUT |
++	grep -A2 "Reading directory block" |
++	awk '/yyyyy/ { print "rm '$SUB'/"$4 }' > $DELETE_LIST
++$DEBUGFS -w -f $DELETE_LIST $TMPFILE >> $OUT 2>&1
++rm $DELETE_LIST
++cp $TMPFILE $TMPFILE.sav
++
++. $cmd_dir/run_e2fsck
+diff --git a/tests/f_h_badnode/expect.1 b/tests/f_h_badnode/expect.1
+index ce2adb3f..95b1cee8 100644
+--- a/tests/f_h_badnode/expect.1
++++ b/tests/f_h_badnode/expect.1
+@@ -14,5 +14,5 @@ Pass 4: Checking reference counts
+ Pass 5: Checking group summary information
+ 
+ test_filesys: ***** FILE SYSTEM WAS MODIFIED *****
+-test_filesys: 47730/100192 files (0.0% non-contiguous), 13551/31745 blocks
++test_filesys: 47730/100192 files (0.0% non-contiguous), 13550/31745 blocks
+ Exit status is 1
+diff --git a/tests/f_h_badnode/expect.2 b/tests/f_h_badnode/expect.2
+index b9dadb73..65985d14 100644
+--- a/tests/f_h_badnode/expect.2
++++ b/tests/f_h_badnode/expect.2
+@@ -3,5 +3,5 @@ Pass 2: Checking directory structure
+ Pass 3: Checking directory connectivity
+ Pass 4: Checking reference counts
+ Pass 5: Checking group summary information
+-test_filesys: 47730/100192 files (0.0% non-contiguous), 13551/31745 blocks
++test_filesys: 47730/100192 files (0.0% non-contiguous), 13550/31745 blocks
+ Exit status is 0
+-- 
+2.17.1
+

@@ -1,0 +1,55 @@
+From 340493b6bc638bc249607dfec950f73b8dec0553 Mon Sep 17 00:00:00 2001
+From: Theodore Ts'o <tytso@mit.edu>
+Date: Sun, 5 Jan 2014 20:31:18 -0500
+Subject: [PATCH 4386/6469] e2fsck: add error checking when moving the quota
+ inode
+
+Addresses-Coverity-Bug: #1049140
+
+Signed-off-by: "Theodore Ts'o" <tytso@mit.edu>
+---
+ e2fsck/quota.c | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/e2fsck/quota.c b/e2fsck/quota.c
+index 7a1476e7..2fd98c94 100644
+--- a/e2fsck/quota.c
++++ b/e2fsck/quota.c
+@@ -22,14 +22,18 @@ static void move_quota_inode(ext2_filsys fs, ext2_ino_t from_ino,
+ 			     ext2_ino_t to_ino, int qtype)
+ {
+ 	struct ext2_inode	inode;
++	errcode_t		retval;
+ 	char			qf_name[QUOTA_NAME_LEN];
+ 
+ 	/* We need the inode bitmap to be loaded */
+ 	if (ext2fs_read_bitmaps(fs))
+ 		return;
+ 
+-	if (ext2fs_read_inode(fs, from_ino, &inode))
++	retval = ext2fs_read_inode(fs, from_ino, &inode);
++	if (retval) {
++		com_err("ext2fs_read_inode", retval, _("in move_quota_inode"));
+ 		return;
++	}
+ 
+ 	inode.i_links_count = 1;
+ 	inode.i_mode = LINUX_S_IFREG | 0600;
+@@ -38,7 +42,13 @@ static void move_quota_inode(ext2_filsys fs, ext2_ino_t from_ino,
+ 			EXT3_FEATURE_INCOMPAT_EXTENTS)
+ 		inode.i_flags |= EXT4_EXTENTS_FL;
+ 
+-	ext2fs_write_new_inode(fs, to_ino, &inode);
++	retval = ext2fs_write_new_inode(fs, to_ino, &inode);
++	if (retval) {
++		com_err("ext2fs_write_new_inode", retval,
++			_("in move_quota_inode"));
++		return;
++	}
++
+ 	/* unlink the old inode */
+ 	quota_get_qf_name(qtype, QFMT_VFS_V1, qf_name);
+ 	ext2fs_unlink(fs, EXT2_ROOT_INO, qf_name, from_ino, 0);
+-- 
+2.17.1
+

@@ -1,0 +1,397 @@
+From 7d79b40bb30e5c1c24ee2072b4b104f5927bb330 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Sun, 25 Mar 2018 12:01:33 -0700
+Subject: [PATCH 5758/6469] e2fsck: adjust quota counters when clearing
+ orphaned inodes
+
+If e2fsck encounters a filesystem that supports internal quotas, it is
+responsible for adjusting the quota counters if it decides to clear any
+orphaned inodes.  Therefore, we must read the quota files, adjust the
+counters, and write the quota files back out when we are done.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ e2fsck/super.c             | 121 +++++++++++++++++++++++++++++++------
+ lib/support/mkquota.c      |  12 ++--
+ tests/f_orphquot/expect    |  10 +++
+ tests/f_orphquot/image.bz2 | Bin 0 -> 1327 bytes
+ tests/f_orphquot/script    |  26 ++++++++
+ 5 files changed, 145 insertions(+), 24 deletions(-)
+ create mode 100644 tests/f_orphquot/expect
+ create mode 100644 tests/f_orphquot/image.bz2
+ create mode 100644 tests/f_orphquot/script
+
+diff --git a/e2fsck/super.c b/e2fsck/super.c
+index 5e29b64e..9c0e0e7b 100644
+--- a/e2fsck/super.c
++++ b/e2fsck/super.c
+@@ -72,6 +72,7 @@ struct process_block_struct {
+ 	int		abort;
+ 	errcode_t	errcode;
+ 	blk64_t last_cluster;
++	struct ext2_inode_large *inode;
+ };
+ 
+ static int release_inode_block(ext2_filsys fs,
+@@ -168,6 +169,8 @@ static int release_inode_block(ext2_filsys fs,
+ 		retval |= BLOCK_CHANGED;
+ 	}
+ 
++	if (ctx->qctx)
++		quota_data_sub(ctx->qctx, pb->inode, 0, ctx->fs->blocksize);
+ 	ext2fs_block_alloc_stats2(fs, blk, -1);
+ 	ctx->free_blocks++;
+ 	return retval;
+@@ -179,15 +182,16 @@ static int release_inode_block(ext2_filsys fs,
+  * not deleted.
+  */
+ static int release_inode_blocks(e2fsck_t ctx, ext2_ino_t ino,
+-				struct ext2_inode *inode, char *block_buf,
++				struct ext2_inode_large *inode, char *block_buf,
+ 				struct problem_context *pctx)
+ {
+ 	struct process_block_struct 	pb;
+ 	ext2_filsys			fs = ctx->fs;
++	blk64_t				blk;
+ 	errcode_t			retval;
+ 	__u32				count;
+ 
+-	if (!ext2fs_inode_has_valid_blocks2(fs, inode))
++	if (!ext2fs_inode_has_valid_blocks2(fs, EXT2_INODE(inode)))
+ 		return 0;
+ 
+ 	pb.buf = block_buf + 3 * ctx->fs->blocksize;
+@@ -196,6 +200,7 @@ static int release_inode_blocks(e2fsck_t ctx, ext2_ino_t ino,
+ 	pb.errcode = 0;
+ 	pb.pctx = pctx;
+ 	pb.last_cluster = 0;
++	pb.inode = inode;
+ 	if (inode->i_links_count) {
+ 		pb.truncating = 1;
+ 		pb.truncate_block = (e2_blkcnt_t)
+@@ -220,15 +225,17 @@ static int release_inode_blocks(e2fsck_t ctx, ext2_ino_t ino,
+ 		return 1;
+ 
+ 	/* Refresh the inode since ext2fs_block_iterate may have changed it */
+-	e2fsck_read_inode(ctx, ino, inode, "release_inode_blocks");
++	e2fsck_read_inode_full(ctx, ino, EXT2_INODE(inode), sizeof(*inode),
++			"release_inode_blocks");
+ 
+ 	if (pb.truncated_blocks)
+-		ext2fs_iblk_sub_blocks(fs, inode, pb.truncated_blocks);
++		ext2fs_iblk_sub_blocks(fs, EXT2_INODE(inode),
++				pb.truncated_blocks);
+ 
+-	if (ext2fs_file_acl_block(fs, inode)) {
+-		retval = ext2fs_adjust_ea_refcount3(fs,
+-				ext2fs_file_acl_block(fs, inode),
+-				block_buf, -1, &count, ino);
++	blk = ext2fs_file_acl_block(fs, EXT2_INODE(inode));
++	if (blk) {
++		retval = ext2fs_adjust_ea_refcount3(fs, blk, block_buf, -1,
++				&count, ino);
+ 		if (retval == EXT2_ET_BAD_EA_BLOCK_NUM) {
+ 			retval = 0;
+ 			count = 1;
+@@ -240,15 +247,68 @@ static int release_inode_blocks(e2fsck_t ctx, ext2_ino_t ino,
+ 			return 1;
+ 		}
+ 		if (count == 0) {
+-			ext2fs_block_alloc_stats2(fs,
+-					ext2fs_file_acl_block(fs, inode), -1);
++			if (ctx->qctx)
++				quota_data_sub(ctx->qctx, inode, 0,
++						ctx->fs->blocksize);
++			ext2fs_block_alloc_stats2(fs, blk, -1);
+ 			ctx->free_blocks++;
+ 		}
+-		ext2fs_file_acl_block_set(fs, inode, 0);
++		ext2fs_file_acl_block_set(fs, EXT2_INODE(inode), 0);
+ 	}
+ 	return 0;
+ }
+ 
++/* Load all quota data in preparation for orphan clearing. */
++static errcode_t e2fsck_read_all_quotas(e2fsck_t ctx)
++{
++	ext2_ino_t qf_ino;
++	enum quota_type qtype;
++	errcode_t retval = 0;
++
++	if (!ext2fs_has_feature_quota(ctx->fs->super))
++		return retval;
++
++	retval = quota_init_context(&ctx->qctx, ctx->fs, 0);
++	if (retval)
++		return retval;
++
++	for (qtype = 0 ; qtype < MAXQUOTAS; qtype++) {
++		qf_ino = *quota_sb_inump(ctx->fs->super, qtype);
++		if (qf_ino == 0)
++			continue;
++
++		retval = quota_update_limits(ctx->qctx, qf_ino, qtype);
++		if (retval)
++			break;
++	}
++	if (retval)
++		quota_release_context(&ctx->qctx);
++	return retval;
++}
++
++/* Write all the quota info to disk. */
++static errcode_t e2fsck_write_all_quotas(e2fsck_t ctx)
++{
++	struct problem_context pctx;
++	enum quota_type qtype;
++
++	if (!ext2fs_has_feature_quota(ctx->fs->super))
++		return 0;
++
++	clear_problem_context(&pctx);
++	for (qtype = 0 ; qtype < MAXQUOTAS; qtype++) {
++		pctx.num = qtype;
++		pctx.errcode = quota_write_inode(ctx->qctx, 1 << qtype);
++		if (pctx.errcode) {
++			fix_problem(ctx, PR_6_WRITE_QUOTAS, &pctx);
++			break;
++		}
++	}
++
++	quota_release_context(&ctx->qctx);
++	return pctx.errcode;
++}
++
+ /*
+  * This function releases all of the orphan inodes.  It returns 1 if
+  * it hit some error, and 0 on success.
+@@ -257,13 +317,20 @@ static int release_orphan_inodes(e2fsck_t ctx)
+ {
+ 	ext2_filsys fs = ctx->fs;
+ 	ext2_ino_t	ino, next_ino;
+-	struct ext2_inode inode;
++	struct ext2_inode_large inode;
+ 	struct problem_context pctx;
+ 	char *block_buf;
+ 
+ 	if ((ino = fs->super->s_last_orphan) == 0)
+ 		return 0;
+ 
++	clear_problem_context(&pctx);
++	pctx.errcode = e2fsck_read_all_quotas(ctx);
++	if (pctx.errcode) {
++		fix_problem(ctx, PR_0_QUOTA_INIT_CTX, &pctx);
++		return 1;
++	}
++
+ 	/*
+ 	 * Win or lose, we won't be using the head of the orphan inode
+ 	 * list again.
+@@ -276,15 +343,18 @@ static int release_orphan_inodes(e2fsck_t ctx)
+ 	 * list, since the orphan list can't be trusted; and we're
+ 	 * going to be running a full e2fsck run anyway...
+ 	 */
+-	if (fs->super->s_state & EXT2_ERROR_FS)
++	if (fs->super->s_state & EXT2_ERROR_FS) {
++		if (ctx->qctx)
++			quota_release_context(&ctx->qctx);
+ 		return 0;
++	}
+ 
+ 	if ((ino < EXT2_FIRST_INODE(fs->super)) ||
+ 	    (ino > fs->super->s_inodes_count)) {
+ 		clear_problem_context(&pctx);
+ 		pctx.ino = ino;
+ 		fix_problem(ctx, PR_0_ORPHAN_ILLEGAL_HEAD_INODE, &pctx);
+-		return 1;
++		goto err_qctx;
+ 	}
+ 
+ 	block_buf = (char *) e2fsck_allocate_memory(ctx, fs->blocksize * 4,
+@@ -292,10 +362,11 @@ static int release_orphan_inodes(e2fsck_t ctx)
+ 	e2fsck_read_bitmaps(ctx);
+ 
+ 	while (ino) {
+-		e2fsck_read_inode(ctx, ino, &inode, "release_orphan_inodes");
++		e2fsck_read_inode_full(ctx, ino, EXT2_INODE(&inode),
++				sizeof(inode), "release_orphan_inodes");
+ 		clear_problem_context(&pctx);
+ 		pctx.ino = ino;
+-		pctx.inode = &inode;
++		pctx.inode = EXT2_INODE(&inode);
+ 		pctx.str = inode.i_links_count ? _("Truncating") :
+ 			_("Clearing");
+ 
+@@ -307,13 +378,15 @@ static int release_orphan_inodes(e2fsck_t ctx)
+ 		     (next_ino > fs->super->s_inodes_count))) {
+ 			pctx.ino = next_ino;
+ 			fix_problem(ctx, PR_0_ORPHAN_ILLEGAL_INODE, &pctx);
+-			goto return_abort;
++			goto err_buf;
+ 		}
+ 
+ 		if (release_inode_blocks(ctx, ino, &inode, block_buf, &pctx))
+-			goto return_abort;
++			goto err_buf;
+ 
+ 		if (!inode.i_links_count) {
++			if (ctx->qctx)
++				quota_data_inodes(ctx->qctx, &inode, ino, -1);
+ 			ext2fs_inode_alloc_stats2(fs, ino, -1,
+ 						  LINUX_S_ISDIR(inode.i_mode));
+ 			ctx->free_inodes++;
+@@ -321,13 +394,21 @@ static int release_orphan_inodes(e2fsck_t ctx)
+ 		} else {
+ 			inode.i_dtime = 0;
+ 		}
+-		e2fsck_write_inode(ctx, ino, &inode, "delete_file");
++		e2fsck_write_inode_full(ctx, ino, EXT2_INODE(&inode),
++				sizeof(inode), "delete_file");
+ 		ino = next_ino;
+ 	}
+ 	ext2fs_free_mem(&block_buf);
++	pctx.errcode = e2fsck_write_all_quotas(ctx);
++	if (pctx.errcode)
++		goto err;
+ 	return 0;
+-return_abort:
++err_buf:
+ 	ext2fs_free_mem(&block_buf);
++err_qctx:
++	if (ctx->qctx)
++		quota_release_context(&ctx->qctx);
++err:
+ 	return 1;
+ }
+ 
+diff --git a/lib/support/mkquota.c b/lib/support/mkquota.c
+index e65c95b7..efc37cb4 100644
+--- a/lib/support/mkquota.c
++++ b/lib/support/mkquota.c
+@@ -516,6 +516,7 @@ struct scan_dquots_data {
+ 	dict_t		*quota_dict;
+ 	int             update_limits; /* update limits from disk */
+ 	int		update_usage;
++	int		check_consistency;
+ 	int		usage_is_inconsistent;
+ };
+ 
+@@ -533,8 +534,9 @@ static int scan_dquots_callback(struct dquot *dquot, void *cb_data)
+ 	print_dquot("dsk", dquot);
+ 
+ 	/* Check if there is inconsistency */
+-	if (dq->dq_dqb.dqb_curspace != dquot->dq_dqb.dqb_curspace ||
+-	    dq->dq_dqb.dqb_curinodes != dquot->dq_dqb.dqb_curinodes) {
++	if (scan_data->check_consistency &&
++	    (dq->dq_dqb.dqb_curspace != dquot->dq_dqb.dqb_curspace ||
++	     dq->dq_dqb.dqb_curinodes != dquot->dq_dqb.dqb_curinodes)) {
+ 		scan_data->usage_is_inconsistent = 1;
+ 		fprintf(stderr, "[QUOTA WARNING] Usage inconsistent for ID %u:"
+ 			"actual (%lld, %lld) != expected (%lld, %lld)\n",
+@@ -568,8 +570,9 @@ static errcode_t quota_read_all_dquots(struct quota_handle *qh,
+ 	struct scan_dquots_data scan_data;
+ 
+ 	scan_data.quota_dict = qctx->quota_dict[qh->qh_type];
+-	scan_data.update_limits = update_limits;
+-	scan_data.update_usage = 0;
++	scan_data.check_consistency = 0;
++	scan_data.update_limits = 0;
++	scan_data.update_usage = 1;
+ 
+ 	return qh->qh_ops->scan_dquots(qh, scan_dquots_callback, &scan_data);
+ }
+@@ -659,6 +662,7 @@ errcode_t quota_compare_and_update(quota_ctx_t qctx, enum quota_type qtype,
+ 	scan_data.quota_dict = qctx->quota_dict[qtype];
+ 	scan_data.update_limits = 1;
+ 	scan_data.update_usage = 0;
++	scan_data.check_consistency = 1;
+ 	scan_data.usage_is_inconsistent = 0;
+ 	err = qh.qh_ops->scan_dquots(&qh, scan_dquots_callback, &scan_data);
+ 	if (err) {
+diff --git a/tests/f_orphquot/expect b/tests/f_orphquot/expect
+new file mode 100644
+index 00000000..90a78130
+--- /dev/null
++++ b/tests/f_orphquot/expect
+@@ -0,0 +1,10 @@
++Clearing orphaned inode 12 (uid=0, gid=0, mode=0100644, size=3842048)
++Pass 1: Checking inodes, blocks, and sizes
++Pass 2: Checking directory structure
++Pass 3: Checking directory connectivity
++Pass 4: Checking reference counts
++Pass 5: Checking group summary information
++
++test_filesystem: ***** FILE SYSTEM WAS MODIFIED *****
++test_filesystem: 11/512 files (9.1% non-contiguous), 1070/2048 blocks
++Exit status is 0
+diff --git a/tests/f_orphquot/image.bz2 b/tests/f_orphquot/image.bz2
+new file mode 100644
+index 0000000000000000000000000000000000000000..44c831852b0740019705c1ffbafa3d37cc561da8
+GIT binary patch
+literal 1327
+zcmV+~1<?9JT4*^jL0KkKSs|BC`v3sQfB*me|MuJ8ynp=vTV5~!@7a2^Ud_+_UmRWU
+z)g`^x-rUdx{s27y6r)uTWhBxv8YYiMqY06t69AfR383_vFq&l07$azD7-RwgnkEQj
+zG{nI)7||Y~<qa^#p#TFwXwyc3(-2_*$jE3kG{OuM6G5N`fB;~c1__X18VrV-VKQO>
+zXg~na8Z^<MG{hJ{GBO$s4KRZQ#L#E~pa2*qfr4ZhMuQ=ym`s>}8U|8G00004z$O3y
+z044%334j3500004!fB%+r=TVP002c2OoE=KN2!uz$l4&tVjiPRnKBvyqaX}`(?Osb
+zX{LiiMuvbI00ThDrkI9-gsStIa}90{i-o$^7K0&Fnl9v$_;F03eab6_f5x#K3=KaF
+zQ*~*u%QiQ&Qe^9>Ziq-jW<+WByf<$9k6!f8P~E+8+J^C$TbAECr+Q!unGTl)FSayf
+zd4mzQ(W!iAD$TM%gJAb=^|Tg6pp0z^MJ<g}0nR#xfEF+a8WJ?P^3WmAz=&sl>Zp}M
+z1J<xAZQ<8_9rMs+&a$xuAG#0_P*&t9f;V#vpc%6;U??k#S1Y+FE2QgnS1fYT8S7^g
+zBp!o#Qp<KX%!Jwp1=?XYHWjG^AR1A)$fR<^1%W^%#fDbU!fTtuBT<wZ=s3dxrx@4a
+zk~!Q$;LsBD0eyu70}PRIjTr+jwo(c*w+rNf)eYG>cvVyY18apMiIyk;CoH8RNGpg0
+zAfO#HnNBxN;}K4G%$Qds2I7IBU_&6n&|q=LNaHxIL!4n-3NnK7D+rdz1poj7+YMn`
+zDQF;2p#n0%jbu~}V+@Ki*fP<9LstkF7*(Lc2T20mVH<1=u&WFRLkfkVg>&pR)gZ9K
+zx5!yx1%^2i6+i$0lBbAqGtI4FMl%5{A*d?8(UYiniqs~V`5gmccz_%3*oI0FhE^Y^
+zf=$*6?1_B)*(yI?9!zK-mYBF+YEZ+4pineT4oo3ze#iM90hJqVVupqAU5iJSgu`LN
+zV~q%9&HVncsrB4Kii9xstOGE?02!?5xFDl;FN`hog)Oup<k@R~9_G;T;0lO%Fv0&y
+zl|!>9HHOqYC;XQXfubk_YG6Q#l1RKVbf!O&f?0|I>j>Z<WQ?IfEN_Vkrvp9I4rT$<
+zupzhzFyIZdwr6(1%x6Px(0TU@z-Z1sWFey=$}(Vb{2%S8J;-#sl;Vc@>_eUk!0*UG
+z0q`KG-U56NoMHGF<x>n$Rtk<~qL`^DECnE8gi$Q8>RDhNJ3$I7t;W?+<wI~*QQAn$
+zec)_x9f);??cBD*B3uJ=f%Kc>fA|1#AW`;+cz1PgL<c_LbtWHD!<ju6U85cTN<b}_
+z84bCkU_J7gz1GR+fS~vslYDw$r;uWwBy~%JpaW#gbCcFSa2J|9<4AUtR#$kyX%OE%
+zpmk_)*niG9a2ovpUw8qEJRs@Ao^yeK`H2UhI&?Bif*SLrj~TFW7zgGw_DtDNq&vRA
+z3zQUo!c35fgM3P%1qz6yl1WK+TzB?vz3T*i?DK!%Jg;9z2^K5Ah5)+ekO(xv+a-VW
+zeZX$t9!Hq`dIkLV;EM91Z#HojfUyDc21ijMu;+l#GbyvuEQ<n}co1Fy^sg$0#uHPW
+zav_IDum+0I?Evsf6ajH!RRt+h1xLvetpkQRC8Zn2Y7Ysm_7Nf28~IGx$G}qr4srwl
+l006WK!?Gmje3DTDrUU@rg;??e)@;xGUC9*TLO_OHKkO*@K@b1{
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/f_orphquot/script b/tests/f_orphquot/script
+new file mode 100644
+index 00000000..acdf5670
+--- /dev/null
++++ b/tests/f_orphquot/script
+@@ -0,0 +1,26 @@
++test_description="e2fsck with quota and orphan inodes"
++OUT=$test_name.log
++EXP=$test_dir/expect
++
++bzip2 -dc < $test_dir/image.bz2 > $TMPFILE
++
++rm -rf $OUT
++$FSCK -f -y -N test_filesystem $TMPFILE > $OUT.new 2>&1
++status=$?
++echo Exit status is $status >> $OUT.new
++sed -f $cmd_dir/filter.sed $OUT.new >> $OUT
++rm -f $OUT.new
++
++cmp -s $OUT $EXP
++status=$?
++
++if [ "$status" = 0 ] ; then
++	echo "$test_name: $test_description: ok"
++	touch $test_name.ok
++else
++	echo "$test_name: $test_description: failed"
++	diff $DIFF_OPTS $EXP $OUT > $test_name.failed
++	rm -f tmp_expect
++fi
++
++unset IMAGE FSCK_OPT OUT EXP
+-- 
+2.17.1
+
