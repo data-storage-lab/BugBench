@@ -1,0 +1,97 @@
+From f3745728bc254892da4c569ba3fd8801895f3524 Mon Sep 17 00:00:00 2001
+From: Eric Sandeen <sandeen@redhat.com>
+Date: Sun, 6 Mar 2016 21:51:23 -0500
+Subject: [PATCH 5174/6469] resize2fs: clear uninit BG if allocating from new
+ group
+
+If resize2fs_get_alloc_block() allocates from a BLOCK_UNINIT group, we
+need to make sure that the UNINIT flag is cleared on both file system
+structures which are maintained by resize2fs.  This causes the
+modified bitmaps to not get written out, which leads to post-resize2fs
+e2fsck errors; used blocks in UNINIT groups, not marked in the block
+bitmap.  This was seen on r_ext4_small_bg.
+
+This patch uses clear_block_uninit() to clear the flag,
+and my problem goes away.
+
+Signed-off-by: Eric Sandeen <sandeen@redhat.com>
+Reviewed-by: Darrick J. Wong <darrick.wong@oracle.com>
+Reviewed-by: Andreas Dilger <adilger@dilger.ca>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ lib/ext2fs/alloc.c  | 6 +++---
+ lib/ext2fs/ext2fs.h | 1 +
+ resize/resize2fs.c  | 7 +++++++
+ 3 files changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/lib/ext2fs/alloc.c b/lib/ext2fs/alloc.c
+index 86e7f998..ce59e855 100644
+--- a/lib/ext2fs/alloc.c
++++ b/lib/ext2fs/alloc.c
+@@ -39,7 +39,7 @@
+ /*
+  * Clear the uninit block bitmap flag if necessary
+  */
+-static void clear_block_uninit(ext2_filsys fs, dgrp_t group)
++void ext2fs_clear_block_uninit(ext2_filsys fs, dgrp_t group)
+ {
+ 	if (!ext2fs_has_group_desc_csum(fs) ||
+ 	    !(ext2fs_bg_flags_test(fs, group, EXT2_BG_BLOCK_UNINIT)))
+@@ -183,7 +183,7 @@ allocated:
+ 	if (retval)
+ 		return retval;
+ 
+-	clear_block_uninit(fs, ext2fs_group_of_blk2(fs, b));
++	ext2fs_clear_block_uninit(fs, ext2fs_group_of_blk2(fs, b));
+ 	*ret = b;
+ 	return 0;
+ }
+@@ -455,7 +455,7 @@ errcode_t ext2fs_new_range(ext2_filsys fs, int flags, blk64_t goal,
+ allocated:
+ 			for (b = start; b < end;
+ 			     b += fs->super->s_blocks_per_group)
+-				clear_block_uninit(fs,
++				ext2fs_clear_block_uninit(fs,
+ 						ext2fs_group_of_blk2(fs, b));
+ 			return 0;
+ 		}
+diff --git a/lib/ext2fs/ext2fs.h b/lib/ext2fs/ext2fs.h
+index c98355db..838b0470 100644
+--- a/lib/ext2fs/ext2fs.h
++++ b/lib/ext2fs/ext2fs.h
+@@ -648,6 +648,7 @@ static inline int ext2fs_needs_large_file_feature(unsigned long long file_size)
+ }
+ 
+ /* alloc.c */
++extern void ext2fs_clear_block_uninit(ext2_filsys fs, dgrp_t group);
+ extern errcode_t ext2fs_new_inode(ext2_filsys fs, ext2_ino_t dir, int mode,
+ 				  ext2fs_inode_bitmap map, ext2_ino_t *ret);
+ extern errcode_t ext2fs_new_block(ext2_filsys fs, blk_t goal,
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index d0a525b2..36da253f 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -1622,6 +1622,7 @@ static errcode_t resize2fs_get_alloc_block(ext2_filsys fs,
+ {
+ 	ext2_resize_t rfs = (ext2_resize_t) fs->priv_data;
+ 	blk64_t blk;
++	int group;
+ 
+ 	blk = get_new_block(rfs);
+ 	if (!blk)
+@@ -1634,6 +1635,12 @@ static errcode_t resize2fs_get_alloc_block(ext2_filsys fs,
+ 
+ 	ext2fs_mark_block_bitmap2(rfs->old_fs->block_map, blk);
+ 	ext2fs_mark_block_bitmap2(rfs->new_fs->block_map, blk);
++
++	group = ext2fs_group_of_blk2(rfs->old_fs, blk);
++	ext2fs_clear_block_uninit(rfs->old_fs, group);
++	group = ext2fs_group_of_blk2(rfs->new_fs, blk);
++	ext2fs_clear_block_uninit(rfs->new_fs, group);
++
+ 	*ret = (blk64_t) blk;
+ 	return 0;
+ }
+-- 
+2.17.1
+

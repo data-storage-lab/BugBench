@@ -1,0 +1,51 @@
+From 69f7c80eaf25a642b0eb85f4557605c89acd80b6 Mon Sep 17 00:00:00 2001
+From: Eric Sandeen <sandeen@redhat.com>
+Date: Mon, 18 May 2009 17:02:32 -0500
+Subject: [PATCH 3006/6469] resize2fs: fix minimum size calculations
+
+The extra padding added to the minimum size calculations:
+
+        /*
+         * We need to reserve a few extra blocks if extents are
+         * enabled, in case we need to grow the extent tree.  The more
+         * we shrink the file system, the more space we need.
+         */
+        if (fs->super->s_feature_incompat & EXT3_FEATURE_INCOMPAT_EXTENTS)
+                blks_needed += (fs->super->s_blocks_count - blks_needed)/500;
+
+can go quite wrong if we've already added up more "blks_needed"
+than our current size, and the above subtraction wraps.  This can
+easily happen for a filesystem which is almost completely full.
+
+In this case, just return the current fs size as the minimum and
+be done with it.
+
+With this fix we could probably call calculate_minimum_resize_size()
+for each resize2fs invocation and refuse to resize smaller than that?
+
+Signed-off-by: Eric Sandeen <sandeen@redhat.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ resize/resize2fs.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index f3e7fd0e..0d5dc81a 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -2002,6 +2002,12 @@ blk_t calculate_minimum_resize_size(ext2_filsys fs)
+ 	blks_needed = (groups-1) * EXT2_BLOCKS_PER_GROUP(fs->super);
+ 	blks_needed += overhead;
+ 
++	/*
++	 * If at this point we've already added up more "needed" than
++	 * the current size, just return current size as minimum.
++	 */
++	if (blks_needed >= fs->super->s_blocks_count)
++		return fs->super->s_blocks_count;
+ 	/*
+ 	 * We need to reserve a few extra blocks if extents are
+ 	 * enabled, in case we need to grow the extent tree.  The more
+-- 
+2.17.1
+

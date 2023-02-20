@@ -1,0 +1,52 @@
+From d93d5bbf605f81eb13fa71a55dfbed06f88fe930 Mon Sep 17 00:00:00 2001
+From: Eric Sandeen <sandeen@redhat.com>
+Date: Mon, 9 Nov 2009 14:57:04 -0600
+Subject: [PATCH 3222/6469] resize2fs: exit fix_sb_journal_backup early for
+ external journal
+
+Resizing a filesystem with an external journal fails when it tries
+to read inode 0:
+
+# touch testfs
+# truncate testfs 1342177280
+# touch testjournal
+# truncate testjournal 134217728
+# mke2fs -O journal_dev testjournal
+# losetup /dev/loop0 testjournal
+# mkfs.ext4 -J device=/dev/loop0 testfs 127680
+# resize2fs testfs
+resize2fs 1.41.9 (22-Aug-2009)
+Resizing the filesystem on testfs to 327680 (4k) blocks.
+resize2fs: Illegal inode number while trying to resize testfs
+Please run 'e2fsck -fy testfs' to fix the filesystem
+after the aborted resize operation.
+
+I think the right, simple thing to do is just bail out early
+for an external journal here, as there are no backup blocks
+to update.
+
+Reported-by: mjevans1983@gmail.com
+Signed-off-by: Eric Sandeen <sandeen@redhat.com>
+Signed-off-by: Theodore Ts'o <tytso@mit.edu>
+---
+ resize/resize2fs.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/resize/resize2fs.c b/resize/resize2fs.c
+index 648e1f93..75c4721e 100644
+--- a/resize/resize2fs.c
++++ b/resize/resize2fs.c
+@@ -1882,6 +1882,10 @@ static errcode_t fix_sb_journal_backup(ext2_filsys fs)
+ 	if (!(fs->super->s_feature_compat & EXT3_FEATURE_COMPAT_HAS_JOURNAL))
+ 		return 0;
+ 
++	/* External journal? Nothing to do. */
++	if (fs->super->s_journal_dev && !fs->super->s_journal_inum)
++		return 0;
++
+ 	retval = ext2fs_read_inode(fs, fs->super->s_journal_inum, &inode);
+ 	if (retval)
+ 		return retval;
+-- 
+2.17.1
+
