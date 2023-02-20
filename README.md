@@ -39,9 +39,15 @@ The "FSAppBugs""[On the Reproducibility of Bugs in File-System Aware Storage App
 By analyzing 59 bug cases from 4 representative applications in depth, we derive multiple insights in terms of general bug patterns, triggering
 conditions, and implications for building effective tools (e.g., bug detection, debugging, provenance tracking). We hope that our results could contribute to the development of robust FS-aware storage applications.
 
+## ConfDBugStudy ##
+
+The "ConfDBugStudy" folder contains the bug studied in "ConfD: Analyzing Configuration Dependencies of File Systems for Fun and Profit".
+
+By analyzing 78 bug patches from 2 file systems (Ext4 and XFS) and their utilitis, we derived a taxonomy of configuration dependencies. We used the derived pattern and taxonomy to build a tool "ConfD" to extract configuration dependencies from the source code automatically and leverage them to find configuration related issues.
 
 ## Contact ##
 Om R. Gatla (ogatla@iastate.edu), 
-Duo Zhang (duozhang@iastate.edu).
+Duo Zhang (duozhang@iastate.edu),
+Tabassum Mahmud (tmahmud@iastate.edu).
 
 
