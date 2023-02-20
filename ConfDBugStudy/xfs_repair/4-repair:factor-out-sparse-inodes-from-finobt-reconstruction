@@ -1,0 +1,63 @@
+From c77c41ee80891925af8ddb14d8a4a328ae6956f0 Mon Sep 17 00:00:00 2001
+From: Brian Foster <bfoster@redhat.com>
+Date: Fri, 31 Jul 2015 09:18:22 +1000
+Subject: repair: factor out sparse inodes from finobt reconstruction
+
+Phase 5 of xfs_repair recreates the on-disk btrees. The free inode btree
+(finobt) contains inode records that contain one or more free inodes.
+Sparse inodes are marked as free and therefore sparse inode records can
+be incorrectly included in the finobt even when no real free inodes are
+available in the record.
+
+Update the finobt in-core record traversal helpers to factor out sparse
+inodes and only consider inode records with allocated, free inodes for
+finobt insertion.
+
+Signed-off-by: Brian Foster <bfoster@redhat.com>
+Reviewed-by: Dave Chinner <dchinner@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ repair/incore.h | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/repair/incore.h b/repair/incore.h
+index d4e44a7a6..5a63e1e16 100644
+--- a/repair/incore.h
++++ b/repair/incore.h
+@@ -384,6 +384,14 @@ void			clear_uncertain_ino_cache(xfs_agnumber_t agno);
+ /*
+  * finobt helpers
+  */
++
++static inline bool
++inode_rec_has_free(struct ino_tree_node *ino_rec)
++{
++	/* must have real, allocated inodes for finobt */
++	return ino_rec->ir_free & ~ino_rec->ir_sparse;
++}
++
+ static inline ino_tree_node_t *
+ findfirst_free_inode_rec(xfs_agnumber_t agno)
+ {
+@@ -391,7 +399,7 @@ findfirst_free_inode_rec(xfs_agnumber_t agno)
+ 
+ 	ino_rec = findfirst_inode_rec(agno);
+ 
+-	while (ino_rec && !ino_rec->ir_free)
++	while (ino_rec && !inode_rec_has_free(ino_rec))
+ 		ino_rec = next_ino_rec(ino_rec);
+ 
+ 	return ino_rec;
+@@ -402,7 +410,7 @@ next_free_ino_rec(ino_tree_node_t *ino_rec)
+ {
+ 	ino_rec = next_ino_rec(ino_rec);
+ 
+-	while (ino_rec && !ino_rec->ir_free)
++	while (ino_rec && !inode_rec_has_free(ino_rec))
+ 		ino_rec = next_ino_rec(ino_rec);
+ 
+ 	return ino_rec;
+-- 
+cgit 
+
+

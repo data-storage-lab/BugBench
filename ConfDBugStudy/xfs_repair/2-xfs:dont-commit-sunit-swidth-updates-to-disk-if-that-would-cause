@@ -1,0 +1,128 @@
+From 1b0819edded7b0df7efdbb885bb42acb7441b998 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Wed, 22 Jan 2020 11:29:46 -0500
+Subject: xfs: don't commit sunit/swidth updates to disk if that would cause
+ repair failures
+
+Source kernel commit: 13eaec4b2adf2657b8167b67e27c97cc7314d923
+
+Alex Lyakas reported[1] that mounting an xfs filesystem with new sunit
+and swidth values could cause xfs_repair to fail loudly.  The problem
+here is that repair calculates the where mkfs should have allocated the
+root inode, based on the superblock geometry.  The allocation decisions
+depend on sunit, which means that we really can't go updating sunit if
+it would lead to a subsequent repair failure on an otherwise correct
+filesystem.
+
+Port from xfs_repair some code that computes the location of the root
+inode and teach mount to skip the ondisk update if it would cause
+problems for repair.  Along the way we'll update the documentation,
+provide a function for computing the minimum AGFL size instead of
+open-coding it, and cut down some indenting in the mount code.
+
+Note that we allow the mount to proceed (and new allocations will
+reflect this new geometry) because we've never screened this kind of
+thing before.  We'll have to wait for a new future incompat feature to
+enforce correct behavior, alas.
+
+Note that the geometry reporting always uses the superblock values, not
+the incore ones, so that is what xfs_info and xfs_growfs will report.
+
+[1] https://lore.kernel.org/linux-xfs/20191125130744.GA44777@bfoster/T/#m00f9594b511e076e2fcdd489d78bc30216d72a7d
+
+Reported-by: Alex Lyakas <alex@zadara.com>
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Reviewed-by: Brian Foster <bfoster@redhat.com>
+Signed-off-by: Eric Sandeen <sandeen@sandeen.net>
+---
+ libxfs/xfs_ialloc.c | 64 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ libxfs/xfs_ialloc.h |  1 +
+ 2 files changed, 65 insertions(+)
+
+diff --git a/libxfs/xfs_ialloc.c b/libxfs/xfs_ialloc.c
+index 71e7d0f6d..23bcc8c9b 100644
+--- a/libxfs/xfs_ialloc.c
++++ b/libxfs/xfs_ialloc.c
+@@ -2903,3 +2903,67 @@ xfs_ialloc_setup_geometry(
+ 	else
+ 		igeo->ialloc_align = 0;
+ }
++
++/* Compute the location of the root directory inode that is laid out by mkfs. */
++xfs_ino_t
++xfs_ialloc_calc_rootino(
++	struct xfs_mount	*mp,
++	int			sunit)
++{
++	struct xfs_ino_geometry	*igeo = M_IGEO(mp);
++	xfs_agblock_t		first_bno;
++
++	/*
++	 * Pre-calculate the geometry of AG 0.  We know what it looks like
++	 * because libxfs knows how to create allocation groups now.
++	 *
++	 * first_bno is the first block in which mkfs could possibly have
++	 * allocated the root directory inode, once we factor in the metadata
++	 * that mkfs formats before it.  Namely, the four AG headers...
++	 */
++	first_bno = howmany(4 * mp->m_sb.sb_sectsize, mp->m_sb.sb_blocksize);
++
++	/* ...the two free space btree roots... */
++	first_bno += 2;
++
++	/* ...the inode btree root... */
++	first_bno += 1;
++
++	/* ...the initial AGFL... */
++	first_bno += xfs_alloc_min_freelist(mp, NULL);
++
++	/* ...the free inode btree root... */
++	if (xfs_sb_version_hasfinobt(&mp->m_sb))
++		first_bno++;
++
++	/* ...the reverse mapping btree root... */
++	if (xfs_sb_version_hasrmapbt(&mp->m_sb))
++		first_bno++;
++
++	/* ...the reference count btree... */
++	if (xfs_sb_version_hasreflink(&mp->m_sb))
++		first_bno++;
++
++	/*
++	 * ...and the log, if it is allocated in the first allocation group.
++	 *
++	 * This can happen with filesystems that only have a single
++	 * allocation group, or very odd geometries created by old mkfs
++	 * versions on very small filesystems.
++	 */
++	if (mp->m_sb.sb_logstart &&
++	    XFS_FSB_TO_AGNO(mp, mp->m_sb.sb_logstart) == 0)
++		 first_bno += mp->m_sb.sb_logblocks;
++
++	/*
++	 * Now round first_bno up to whatever allocation alignment is given
++	 * by the filesystem or was passed in.
++	 */
++	if (xfs_sb_version_hasdalign(&mp->m_sb) && igeo->ialloc_align > 0)
++		first_bno = roundup(first_bno, sunit);
++	else if (xfs_sb_version_hasalign(&mp->m_sb) &&
++			mp->m_sb.sb_inoalignmt > 1)
++		first_bno = roundup(first_bno, mp->m_sb.sb_inoalignmt);
++
++	return XFS_AGINO_TO_INO(mp, 0, XFS_AGB_TO_AGINO(mp, first_bno));
++}
+diff --git a/libxfs/xfs_ialloc.h b/libxfs/xfs_ialloc.h
+index 323592d56..72b3468b9 100644
+--- a/libxfs/xfs_ialloc.h
++++ b/libxfs/xfs_ialloc.h
+@@ -152,5 +152,6 @@ int xfs_inobt_insert_rec(struct xfs_btree_cur *cur, uint16_t holemask,
+ 
+ int xfs_ialloc_cluster_alignment(struct xfs_mount *mp);
+ void xfs_ialloc_setup_geometry(struct xfs_mount *mp);
++xfs_ino_t xfs_ialloc_calc_rootino(struct xfs_mount *mp, int sunit);
+ 
+ #endif	/* __XFS_IALLOC_H__ */
+-- 
+cgit 
+
+

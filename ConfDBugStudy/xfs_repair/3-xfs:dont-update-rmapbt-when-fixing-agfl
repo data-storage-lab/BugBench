@@ -1,0 +1,78 @@
+From e365af6fec1c31b27dbdf011cef90ef285e6dc56 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Wed, 10 Aug 2016 14:52:20 +1000
+Subject: xfs: don't update rmapbt when fixing agfl
+
+Source kernel commit: 04f130605ff6fb01a93a0885607921df9c463eed
+
+Allow a caller of xfs_alloc_fix_freelist to disable rmapbt updates
+when fixing the AG freelist.  xfs_repair needs this during phase 5
+to be able to adjust the freelist while it's reconstructing the rmap
+btree; the missing entries will be added back at the very end of
+phase 5 once the AGFL contents settle down.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Reviewed-by: Dave Chinner <dchinner@redhat.com>
+Signed-off-by: Dave Chinner <david@fromorbit.com>
+---
+ libxfs/xfs_alloc.c | 18 ++++++++++++++----
+ libxfs/xfs_alloc.h |  3 +++
+ 2 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/libxfs/xfs_alloc.c b/libxfs/xfs_alloc.c
+index a884e434b..334c5fcd9 100644
+--- a/libxfs/xfs_alloc.c
++++ b/libxfs/xfs_alloc.c
+@@ -2086,9 +2086,21 @@ xfs_alloc_fix_freelist(
+ 	 * anything other than extra overhead when we need to put more blocks
+ 	 * back on the free list? Maybe we should only do this when space is
+ 	 * getting low or the AGFL is more than half full?
++	 *
++	 * The NOSHRINK flag prevents the AGFL from being shrunk if it's too
++	 * big; the NORMAP flag prevents AGFL expand/shrink operations from
++	 * updating the rmapbt.  Both flags are used in xfs_repair while we're
++	 * rebuilding the rmapbt, and neither are used by the kernel.  They're
++	 * both required to ensure that rmaps are correctly recorded for the
++	 * regenerated AGFL, bnobt, and cntbt.  See repair/phase5.c and
++	 * repair/rmap.c in xfsprogs for details.
+ 	 */
+-	xfs_rmap_ag_owner(&targs.oinfo, XFS_RMAP_OWN_AG);
+-	while (pag->pagf_flcount > need) {
++	memset(&targs, 0, sizeof(targs));
++	if (flags & XFS_ALLOC_FLAG_NORMAP)
++		xfs_rmap_skip_owner_update(&targs.oinfo);
++	else
++		xfs_rmap_ag_owner(&targs.oinfo, XFS_RMAP_OWN_AG);
++	while (!(flags & XFS_ALLOC_FLAG_NOSHRINK) && pag->pagf_flcount > need) {
+ 		struct xfs_buf	*bp;
+ 
+ 		error = xfs_alloc_get_freelist(tp, agbp, &bno, 0);
+@@ -2102,10 +2114,8 @@ xfs_alloc_fix_freelist(
+ 		xfs_trans_binval(tp, bp);
+ 	}
+ 
+-	memset(&targs, 0, sizeof(targs));
+ 	targs.tp = tp;
+ 	targs.mp = mp;
+-	xfs_rmap_ag_owner(&targs.oinfo, XFS_RMAP_OWN_AG);
+ 	targs.agbp = agbp;
+ 	targs.agno = args->agno;
+ 	targs.alignment = targs.minlen = targs.prod = targs.isfl = 1;
+diff --git a/libxfs/xfs_alloc.h b/libxfs/xfs_alloc.h
+index 360f9e425..6fe2d6b7c 100644
+--- a/libxfs/xfs_alloc.h
++++ b/libxfs/xfs_alloc.h
+@@ -54,6 +54,9 @@ typedef unsigned int xfs_alloctype_t;
+  */
+ #define	XFS_ALLOC_FLAG_TRYLOCK	0x00000001  /* use trylock for buffer locking */
+ #define	XFS_ALLOC_FLAG_FREEING	0x00000002  /* indicate caller is freeing extents*/
++#define	XFS_ALLOC_FLAG_NORMAP	0x00000004  /* don't modify the rmapbt */
++#define	XFS_ALLOC_FLAG_NOSHRINK	0x00000008  /* don't shrink the freelist */
++
+ 
+ /*
+  * Argument structure for xfs_alloc routines.
+-- 
+cgit 
+
+

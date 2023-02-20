@@ -1,0 +1,122 @@
+From 37c7dda1c20bfd2cc73679275bab2dd43e0ad9b8 Mon Sep 17 00:00:00 2001
+From: "Darrick J. Wong" <darrick.wong@oracle.com>
+Date: Fri, 20 Nov 2020 17:03:28 -0500
+Subject: xfs_repair: support bigtime timestamp checking
+
+Make sure that inodes don't have the bigtime flag set when the feature
+is disabled, and don't check for overflows in the nanoseconds when
+bigtime is enabled because that is no longer possible.  Also make sure
+that quotas don't have bigtime set erroneously.
+
+Signed-off-by: Darrick J. Wong <darrick.wong@oracle.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Eric Sandeen <sandeen@sandeen.net>
+---
+ repair/dinode.c     | 33 +++++++++++++++++++++++++++++----
+ repair/quotacheck.c | 11 ++++++++++-
+ 2 files changed, 39 insertions(+), 5 deletions(-)
+
+diff --git a/repair/dinode.c b/repair/dinode.c
+index 1becaa975..eaaff3d33 100644
+--- a/repair/dinode.c
++++ b/repair/dinode.c
+@@ -2123,11 +2123,15 @@ static void
+ check_nsec(
+ 	const char		*name,
+ 	xfs_ino_t		lino,
++	struct xfs_dinode	*dip,
+ 	xfs_timestamp_t		*ts,
+ 	int			*dirty)
+ {
+ 	struct xfs_legacy_timestamp *t;
+ 
++	if (xfs_dinode_has_bigtime(dip))
++		return;
++
+ 	t = (struct xfs_legacy_timestamp *)ts;
+ 	if (be32_to_cpu(t->t_nsec) < NSEC_PER_SEC)
+ 		return;
+@@ -2550,6 +2554,27 @@ _("bad (negative) size %" PRId64 " on inode %" PRIu64 "\n"),
+ 			flags2 &= ~XFS_DIFLAG2_COWEXTSIZE;
+ 		}
+ 
++		if (xfs_dinode_has_bigtime(dino) &&
++		    !xfs_sb_version_hasbigtime(&mp->m_sb)) {
++			if (!uncertain) {
++				do_warn(
++	_("inode %" PRIu64 " is marked bigtime but file system does not support large timestamps\n"),
++					lino);
++			}
++			flags2 &= ~XFS_DIFLAG2_BIGTIME;
++
++			if (no_modify) {
++				do_warn(_("would zero timestamps.\n"));
++			} else {
++				do_warn(_("zeroing timestamps.\n"));
++				dino->di_atime = 0;
++				dino->di_mtime = 0;
++				dino->di_ctime = 0;
++				dino->di_crtime = 0;
++				*dirty = 1;
++			}
++		}
++
+ 		if (!verify_mode && flags2 != be64_to_cpu(dino->di_flags2)) {
+ 			if (!no_modify) {
+ 				do_warn(_("fixing bad flags2.\n"));
+@@ -2677,11 +2702,11 @@ _("Bad CoW extent size %u on inode %" PRIu64 ", "),
+ 	}
+ 
+ 	/* nsec fields cannot be larger than 1 billion */
+-	check_nsec("atime", lino, &dino->di_atime, dirty);
+-	check_nsec("mtime", lino, &dino->di_mtime, dirty);
+-	check_nsec("ctime", lino, &dino->di_ctime, dirty);
++	check_nsec("atime", lino, dino, &dino->di_atime, dirty);
++	check_nsec("mtime", lino, dino, &dino->di_mtime, dirty);
++	check_nsec("ctime", lino, dino, &dino->di_ctime, dirty);
+ 	if (dino->di_version >= 3)
+-		check_nsec("crtime", lino, &dino->di_crtime, dirty);
++		check_nsec("crtime", lino, dino, &dino->di_crtime, dirty);
+ 
+ 	/*
+ 	 * general size/consistency checks:
+diff --git a/repair/quotacheck.c b/repair/quotacheck.c
+index 8cbbfa2e6..55bcc0485 100644
+--- a/repair/quotacheck.c
++++ b/repair/quotacheck.c
+@@ -237,6 +237,7 @@ quotacheck_adjust(
+ /* Compare this on-disk dquot against whatever we observed. */
+ static void
+ qc_check_dquot(
++	struct xfs_mount	*mp,
+ 	struct xfs_disk_dquot	*ddq,
+ 	struct qc_dquots	*dquots)
+ {
+@@ -273,6 +274,14 @@ qc_check_dquot(
+ 		chkd_flags = 0;
+ 	}
+ 
++	if ((ddq->d_type & XFS_DQTYPE_BIGTIME) &&
++	    !xfs_sb_version_hasbigtime(&mp->m_sb)) {
++		do_warn(
++	_("%s id %u is marked bigtime but file system does not support large timestamps\n"),
++				qflags_typestr(dquots->type), id);
++		chkd_flags = 0;
++	}
++
+ 	/*
+ 	 * Mark that we found the record on disk.  Skip locking here because
+ 	 * we're checking the dquots serially.
+@@ -322,7 +331,7 @@ _("cannot read %s inode %"PRIu64", block %"PRIu64", disk block %"PRIu64", err=%d
+ 		for (dqnr = 0;
+ 		     dqnr < dqperchunk && dqid <= UINT_MAX;
+ 		     dqnr++, dqb++, dqid++)
+-			qc_check_dquot(&dqb->dd_diskdq, dquots);
++			qc_check_dquot(mp, &dqb->dd_diskdq, dquots);
+ 		libxfs_buf_relse(bp);
+ 	}
+ 
+-- 
+cgit 
+
+
