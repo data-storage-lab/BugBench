@@ -2,7 +2,7 @@
 
 This repository contains real-world bug cases curated by Data Storage Lab@ISU and studied in our research projects. Depending on the projects, we may perform a variety of analysis on the bug cases including characterization of bug patterns, reproducibility experiments, bug detection, failure diagnosis, etc. We hope that our efforts and the resulting datasets can inspire follow-up research in the community and help improve system reliability in general.
 
-About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBench: Benchmarks for Evaluating Bug Detection Tools](http://opera.ucsd.edu/paper/63-lu.pdf)" by Shan Lu et. al. which characterizes a set of bugs in user-level applications. The "<sup>k</sup>" denotes the fact that the initial set of bug cases curated in BugBench<sup>k</sup> were kernel-level bugs.  
+About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBench: Benchmarks for Evaluating Bug Detection Tools](http://opera.ucsd.edu/paper/63-lu.pdf)" by Shan Lu, Zhenmin Li, Feng Qin, Lin Tan, Pin Zhou and Yuanyuan Zhou, which characterized a set of bugs in user-level applications. The "<sup>k</sup>" denotes the fact that the initial set of bug cases curated in BugBench<sup>k</sup> were kernel-level bugs.  
 
 BugBench<sup>k</sup> Related Publications:
 
