@@ -6,6 +6,9 @@ About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBenc
 
 BugBench<sup>k</sup> Related Publications:
 
+- "[ConfD: Analyzing Configuration Dependencies of File Systems for Fun and Profit](https://www.usenix.org/conference/fast23/presentation/mahmud)",
+Tabassum Mahmud, Om Rameshwar Gatla, Duo Zhang, Carson Love, Ryan Bumann, and Mai Zheng, Proceedings of the 21st USENIX Conference on File and Storage Technologies ([FAST](https://www.usenix.org/conference/fast23)), 2023.
+
 - "[On the Reproducibility of Bugs in File-System Aware Storage Applications](https://ieeexplore.ieee.org/document/9925445)", 
 Duo Zhang, Tabassum Mahmud, Om Rameshwar Gatla, Runzhou Han, Yong Chen, and Mai Zheng,
 Proceedings of the 16th IEEE International Conference On Networking, Architecture, and Storage ([NAS](http://www.nas-conference.org/NAS-2022/)), 2022.
@@ -41,13 +44,15 @@ conditions, and implications for building effective tools (e.g., bug detection, 
 
 ## ConfDBugStudy ##
 
-The "ConfDBugStudy" folder contains the bug studied in "ConfD: Analyzing Configuration Dependencies of File Systems for Fun and Profit".
+The "ConfDBugStudy" folder contains the bug studied in "[ConfD: Analyzing Configuration Dependencies of File Systems for Fun and Profit](https://www.usenix.org/conference/fast23/presentation/mahmud)", which was published in the 21st USENIX Conference on File and Storage Technologies ([FAST](https://www.usenix.org/conference/fast23)), 2023.
 
 By analyzing 78 bug patches from 2 file systems (Ext4 and XFS) and their utilitis, we derived a taxonomy of configuration dependencies. We used the derived pattern and taxonomy to build a tool "ConfD" to extract configuration dependencies from the source code automatically and leverage them to find configuration related issues.
 
 ## Contact ##
-Om R. Gatla (ogatla@iastate.edu), 
-Duo Zhang (duozhang@iastate.edu),
-Tabassum Mahmud (tmahmud@iastate.edu).
+Om R. Gatla (ogatla@iastate.edu)   
+Duo Zhang (duozhang@iastate.edu)  
+Tabassum Mahmud (tmahmud@iastate.edu)  
+Chongliu Jia (jcl0618@iastate.edu)
+
 
 
