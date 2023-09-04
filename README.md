@@ -23,10 +23,10 @@ BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](http
 
 ## Persistent Memory Bugs in the Linux Kernel ##
 
-The "PMBugs" folder contains the dataset studied in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel](https://dl.acm.org/doi/pdf/10.1145/3456727.3463783)", which was published in the Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021.
+The "PMBugs" folder contains the dataset studied in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel](https://dl.acm.org/doi/pdf/10.1145/3456727.3463783)", which was published in the Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021, and in our journal "Understanding Persistent-Memory Related Issues in the Linux Kernel", which was published in ACM Transactions on Storage (TOS),2022.
 
 By analyzing 1,350 PM related kernel patches in depth, we derive multiple insights in terms of PM patch categories, PM bug patterns, consequences, and fix
-strategies. We hope our results could contribute to the development of effective PM bug detectors and robust PM-based systems.
+strategies. Also, we leverage static analyze to identify Persistent Memory Driver issues. We hope our results could contribute to the development of effective PM bug detectors and robust PM-based systems.
 
 ## Benchmarking for Observability ##
 
@@ -49,10 +49,10 @@ The "ConfDBugStudy" folder contains the bug studied in "[ConfD: Analyzing Config
 By analyzing 78 bug patches from 2 file systems (Ext4 and XFS) and their utilitis, we derived a taxonomy of configuration dependencies. We used the derived pattern and taxonomy to build a tool "ConfD" to extract configuration dependencies from the source code automatically and leverage them to find configuration related issues.
 
 ## Contact ##
-Om R. Gatla (ogatla@iastate.edu)   
 Duo Zhang (duozhang@iastate.edu)  
 Tabassum Mahmud (tmahmud@iastate.edu)  
 Chongliu Jia (jcl0618@iastate.edu)
+Om R. Gatla (ogatla@iastate.edu)
 
 
 
