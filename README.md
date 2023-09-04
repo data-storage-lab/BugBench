@@ -51,7 +51,7 @@ By analyzing 78 bug patches from 2 file systems (Ext4 and XFS) and their utiliti
 ## Contact ##
 Duo Zhang (duozhang@iastate.edu)  
 Tabassum Mahmud (tmahmud@iastate.edu)  
-Chongliu Jia (jcl0618@iastate.edu) 
+Chongliu Jia (jcl0618@iastate.edu)  
 Om R. Gatla (ogatla@iastate.edu)
 
 
