@@ -2,7 +2,7 @@
 
 This repository contains patches submitted to the Linux Kernel source tree that fix correctness issues related to Persistent Memory (PM) devices.
 
-We have performed a thorough analysis on these bugs and publised our results in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel] (https://dl.acm.org/doi/10.1145/3456727.3463783)" and in our journal "Understanding Persistent Memory Related Issues in the Linux Kernel". Our paper was accepted and publised at the [14th ACM International Systems and Storage Conference (SYSTOR)](https://www.systor.org/2021/index.html), 2021, and our journal was accepted at the ACM Transactions on Storage (TOS)
+We have performed a thorough analysis on these bugs and publised our results in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel] (https://dl.acm.org/doi/10.1145/3456727.3463783)" and in our journal "Understanding Persistent Memory Related Issues in the Linux Kernel". Our paper was accepted and publised at the [14th ACM International Systems and Storage Conference (SYSTOR)](https://www.systor.org/2021/index.html), 2021, and our journal was accepted at the ACM Transactions on Storage (TOS), 2023
 
 The repository consists of five directories, based on the bug pattern observed. Each directories has sub-directories that contain patches related to the bug pattern sub-types. The description of the five directories is as follows:
 - Hardware Dependent: Improper PM device usage (e.g.: ambiguous specification, alignment)
