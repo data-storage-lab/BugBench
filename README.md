@@ -5,6 +5,7 @@ This repository contains real-world bug cases curated by Data Storage Lab@ISU an
 About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBench: Benchmarks for Evaluating Bug Detection Tools](https://www.cs.umd.edu/~pugh/BugWorkshop05/papers/63-lu.pdf)" by [Shan Lu](http://people.cs.uchicago.edu/~shanlu/), Zhenmin Li, Feng Qin, Lin Tan, Pin Zhou and Yuanyuan Zhou at [BugWorkshop'05](https://www.cs.umd.edu/~pugh/BugWorkshop05/), which characterized a set of bugs in user-level applications. The "<sup>k</sup>" denotes the fact that the initial set of bug cases curated in BugBench<sup>k</sup> were kernel-level bugs.  
 
 BugBench<sup>k</sup> Related Publications:
+
 - "[Understanding Persistent-Memory Related Issues in the Linux Kernel](https://arxiv.org/abs/2307.04095)",
 Om Rameshwar Gatla, Duo Zhang, Wei Xu, and Mai Zheng, ACM Transactions on Storage (TOS), 2023.
 
