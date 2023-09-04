@@ -1,0 +1,35 @@
+From de291b5902860d18d6e02000808aeb833ec1feb6 Mon Sep 17 00:00:00 2001
+From: Christoph Hellwig <hch@lst.de>
+Date: Wed, 8 Dec 2021 10:12:03 +0100
+Subject: [PATCH 985864/993600] iomap: turn the byte variable in
+ iomap_zero_iter into a ssize_t
+
+@bytes also holds the return value from iomap_write_end, which can
+contain a negative error value.  As @bytes is always less than the page
+size even the signed type can hold the entire possible range.
+
+Fixes: c6f40468657d ("fsdax: decouple zeroing from the iomap buffered I/O code")
+Reported-by: Dan Carpenter <dan.carpenter@oracle.com>
+Signed-off-by: Christoph Hellwig <hch@lst.de>
+Link: https://lore.kernel.org/r/20211208091203.2927754-1-hch@lst.de
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ fs/iomap/buffered-io.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/fs/iomap/buffered-io.c b/fs/iomap/buffered-io.c
+index b1511255b4df..ac040d607f4f 100644
+--- a/fs/iomap/buffered-io.c
++++ b/fs/iomap/buffered-io.c
+@@ -883,7 +883,7 @@ static loff_t iomap_zero_iter(struct iomap_iter *iter, bool *did_zero)
+ 
+ 	do {
+ 		unsigned offset = offset_in_page(pos);
+-		size_t bytes = min_t(u64, PAGE_SIZE - offset, length);
++		ssize_t bytes = min_t(u64, PAGE_SIZE - offset, length);
+ 		struct page *page;
+ 		int status;
+ 
+-- 
+2.17.1
+

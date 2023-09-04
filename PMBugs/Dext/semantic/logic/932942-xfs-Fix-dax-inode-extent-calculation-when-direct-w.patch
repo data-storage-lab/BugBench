@@ -1,0 +1,59 @@
+From 5147ef30f2cd128c9eedf7a697e8cb2ce2767989 Mon Sep 17 00:00:00 2001
+From: Chandan Babu R <chandanrlinux@gmail.com>
+Date: Thu, 25 Mar 2021 11:48:18 -0700
+Subject: [PATCH 932942/993600] xfs: Fix dax inode extent calculation when
+ direct write is performed on an unwritten extent
+
+With dax enabled filesystems, a direct write operation into an existing
+unwritten extent results in xfs_iomap_write_direct() zero-ing and converting
+the extent into a normal extent before the actual data is copied from the
+userspace buffer.
+
+The inode extent count can increase by 2 if the extent range being written to
+maps to the middle of the existing unwritten extent range. Hence this commit
+uses XFS_IEXT_WRITE_UNWRITTEN_CNT as the extent count delta when such a write
+operation is being performed.
+
+Fixes: 727e1acd297c ("xfs: Check for extent overflow when trivally adding a new extent")
+Reported-by: Darrick J. Wong <djwong@kernel.org>
+Signed-off-by: Chandan Babu R <chandanrlinux@gmail.com>
+Reviewed-by: Darrick J. Wong <djwong@kernel.org>
+Signed-off-by: Darrick J. Wong <djwong@kernel.org>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+---
+ fs/xfs/xfs_iomap.c | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/fs/xfs/xfs_iomap.c b/fs/xfs/xfs_iomap.c
+index e17ab7f42928..8b27c10a3d08 100644
+--- a/fs/xfs/xfs_iomap.c
++++ b/fs/xfs/xfs_iomap.c
+@@ -198,6 +198,7 @@ xfs_iomap_write_direct(
+ 	bool			force = false;
+ 	int			error;
+ 	int			bmapi_flags = XFS_BMAPI_PREALLOC;
++	int			nr_exts = XFS_IEXT_ADD_NOSPLIT_CNT;
+ 
+ 	ASSERT(count_fsb > 0);
+ 
+@@ -232,6 +233,7 @@ xfs_iomap_write_direct(
+ 		bmapi_flags = XFS_BMAPI_CONVERT | XFS_BMAPI_ZERO;
+ 		if (imap->br_state == XFS_EXT_UNWRITTEN) {
+ 			force = true;
++			nr_exts = XFS_IEXT_WRITE_UNWRITTEN_CNT;
+ 			dblocks = XFS_DIOSTRAT_SPACE_RES(mp, 0) << 1;
+ 		}
+ 	}
+@@ -241,8 +243,7 @@ xfs_iomap_write_direct(
+ 	if (error)
+ 		return error;
+ 
+-	error = xfs_iext_count_may_overflow(ip, XFS_DATA_FORK,
+-			XFS_IEXT_ADD_NOSPLIT_CNT);
++	error = xfs_iext_count_may_overflow(ip, XFS_DATA_FORK, nr_exts);
+ 	if (error)
+ 		goto out_trans_cancel;
+ 
+-- 
+2.17.1
+

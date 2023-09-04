@@ -1,0 +1,69 @@
+From a624eb520390cecf644a8906c982fd53b2afcc49 Mon Sep 17 00:00:00 2001
+From: Dan Williams <dan.j.williams@intel.com>
+Date: Mon, 7 Jun 2021 16:52:43 -0700
+Subject: [PATCH 947042/993600] libnvdimm/pmem: Fix blk_cleanup_disk() usage
+
+The queue_to_disk() helper can not be used after del_gendisk()
+communicate @disk via the pgmap->owner.
+
+Otherwise, queue_to_disk() returns NULL resulting in the splat below.
+
+ Kernel attempted to read user page (330) - exploit attempt? (uid: 0)
+ BUG: Kernel NULL pointer dereference on read at 0x00000330
+ Faulting instruction address: 0xc000000000906344
+ Oops: Kernel access of bad area, sig: 11 [#1]
+ [..]
+ NIP [c000000000906344] pmem_pagemap_cleanup+0x24/0x40
+ LR [c0000000004701d4] memunmap_pages+0x1b4/0x4b0
+ Call Trace:
+ [c000000022cbb9c0] [c0000000009063c8] pmem_pagemap_kill+0x28/0x40 (unreliable)
+ [c000000022cbb9e0] [c0000000004701d4] memunmap_pages+0x1b4/0x4b0
+ [c000000022cbba90] [c0000000008b28a0] devm_action_release+0x30/0x50
+ [c000000022cbbab0] [c0000000008b39c8] release_nodes+0x2f8/0x3e0
+ [c000000022cbbb60] [c0000000008ac440] device_release_driver_internal+0x190/0x2b0
+ [c000000022cbbba0] [c0000000008a8450] unbind_store+0x130/0x170
+
+Reported-by: Sachin Sant <sachinp@linux.vnet.ibm.com>
+Fixes: 87eb73b2ca7c ("nvdimm-pmem: convert to blk_alloc_disk/blk_cleanup_disk")
+Link: http://lore.kernel.org/r/DFB75BA8-603F-4A35-880B-C5B23EF8FA7D@linux.vnet.ibm.com
+Cc: Christoph Hellwig <hch@lst.de>
+Cc: Ulf Hansson <ulf.hansson@linaro.org>
+Cc: Jens Axboe <axboe@kernel.dk>
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Tested-by: Sachin Sant <sachinp@linux.vnet.ibm.com>
+Link: https://lore.kernel.org/r/162310994435.1571616.334551212901820961.stgit@dwillia2-desk3.amr.corp.intel.com
+[axboe: fold in compile warning fix]
+Signed-off-by: Jens Axboe <axboe@kernel.dk>
+---
+ drivers/nvdimm/pmem.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/drivers/nvdimm/pmem.c b/drivers/nvdimm/pmem.c
+index 31f3c4bd6f72..1e0615b8565e 100644
+--- a/drivers/nvdimm/pmem.c
++++ b/drivers/nvdimm/pmem.c
+@@ -335,10 +335,9 @@ static const struct attribute_group *pmem_attribute_groups[] = {
+ 
+ static void pmem_pagemap_cleanup(struct dev_pagemap *pgmap)
+ {
+-	struct request_queue *q =
+-		container_of(pgmap->ref, struct request_queue, q_usage_counter);
++	struct pmem_device *pmem = pgmap->owner;
+ 
+-	blk_cleanup_disk(queue_to_disk(q));
++	blk_cleanup_disk(pmem->disk);
+ }
+ 
+ static void pmem_release_queue(void *pgmap)
+@@ -427,6 +426,7 @@ static int pmem_attach_disk(struct device *dev,
+ 	q = disk->queue;
+ 
+ 	pmem->disk = disk;
++	pmem->pgmap.owner = pmem;
+ 	pmem->pfn_flags = PFN_DEV;
+ 	pmem->pgmap.ref = &q->q_usage_counter;
+ 	if (is_nd_pfn(dev)) {
+-- 
+2.17.1
+

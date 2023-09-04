@@ -1,0 +1,35 @@
+From b05d4c576b697b9f462b9c532c997171d5c3b067 Mon Sep 17 00:00:00 2001
+From: Ira Weiny <ira.weiny@intel.com>
+Date: Tue, 25 May 2021 10:24:28 -0700
+Subject: [PATCH 954001/993600] dax: Ensure errno is returned from
+ dax_direct_access
+
+If the caller specifies a negative nr_pages that is an invalid
+parameter.
+
+Return -EINVAL to ensure callers get an errno if they want to check it.
+
+Reviewed-by: Dan Williams <dan.j.williams@intel.com>
+Signed-off-by: Ira Weiny <ira.weiny@intel.com>
+Link: https://lore.kernel.org/r/20210525172428.3634316-4-ira.weiny@intel.com
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/dax/super.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/dax/super.c b/drivers/dax/super.c
+index 5fa6ae9dbc8b..44736cbd446e 100644
+--- a/drivers/dax/super.c
++++ b/drivers/dax/super.c
+@@ -313,7 +313,7 @@ long dax_direct_access(struct dax_device *dax_dev, pgoff_t pgoff, long nr_pages,
+ 		return -ENXIO;
+ 
+ 	if (nr_pages < 0)
+-		return nr_pages;
++		return -EINVAL;
+ 
+ 	avail = dax_dev->ops->direct_access(dax_dev, pgoff, nr_pages,
+ 			kaddr, pfn);
+-- 
+2.17.1
+

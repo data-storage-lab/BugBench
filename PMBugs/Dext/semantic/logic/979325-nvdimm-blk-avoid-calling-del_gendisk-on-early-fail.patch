@@ -1,0 +1,71 @@
+From b7421afcec0c77ab58633587ddc29d53e6eb95af Mon Sep 17 00:00:00 2001
+From: Luis Chamberlain <mcgrof@kernel.org>
+Date: Wed, 3 Nov 2021 16:04:26 -0700
+Subject: [PATCH 979325/993600] nvdimm/blk: avoid calling del_gendisk() on
+ early failures
+
+If nd_integrity_init() fails we'd get del_gendisk() called,
+but that's not correct as we should only call that if we're
+done with device_add_disk(). Fix this by providing unwinding
+prior to the devm call being registered and moving the devm
+registration to the very end.
+
+This should fix calling del_gendisk() if nd_integrity_init()
+fails. I only spotted this issue through code inspection. It
+does not fix any real world bug.
+
+Reviewed-by: Christoph Hellwig <hch@lst.de>
+Signed-off-by: Luis Chamberlain <mcgrof@kernel.org>
+Link: https://lore.kernel.org/r/20211103230437.1639990-4-mcgrof@kernel.org
+Signed-off-by: Jens Axboe <axboe@kernel.dk>
+---
+ drivers/nvdimm/blk.c | 17 ++++++++++++-----
+ 1 file changed, 12 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/nvdimm/blk.c b/drivers/nvdimm/blk.c
+index b6c6866f9259..4eef67918a7e 100644
+--- a/drivers/nvdimm/blk.c
++++ b/drivers/nvdimm/blk.c
+@@ -239,6 +239,7 @@ static int nsblk_attach_disk(struct nd_namespace_blk *nsblk)
+ 	resource_size_t available_disk_size;
+ 	struct gendisk *disk;
+ 	u64 internal_nlba;
++	int rc;
+ 
+ 	internal_nlba = div_u64(nsblk->size, nsblk_internal_lbasize(nsblk));
+ 	available_disk_size = internal_nlba * nsblk_sector_size(nsblk);
+@@ -255,20 +256,26 @@ static int nsblk_attach_disk(struct nd_namespace_blk *nsblk)
+ 	blk_queue_logical_block_size(disk->queue, nsblk_sector_size(nsblk));
+ 	blk_queue_flag_set(QUEUE_FLAG_NONROT, disk->queue);
+ 
+-	if (devm_add_action_or_reset(dev, nd_blk_release_disk, disk))
+-		return -ENOMEM;
+-
+ 	if (nsblk_meta_size(nsblk)) {
+-		int rc = nd_integrity_init(disk, nsblk_meta_size(nsblk));
++		rc = nd_integrity_init(disk, nsblk_meta_size(nsblk));
+ 
+ 		if (rc)
+-			return rc;
++			goto out_before_devm_err;
+ 	}
+ 
+ 	set_capacity(disk, available_disk_size >> SECTOR_SHIFT);
+ 	device_add_disk(dev, disk, NULL);
++
++	/* nd_blk_release_disk() is called if this fails */
++	if (devm_add_action_or_reset(dev, nd_blk_release_disk, disk))
++		return -ENOMEM;
++
+ 	nvdimm_check_and_set_ro(disk);
+ 	return 0;
++
++out_before_devm_err:
++	blk_cleanup_disk(disk);
++	return rc;
+ }
+ 
+ static int nd_blk_probe(struct device *dev)
+-- 
+2.17.1
+

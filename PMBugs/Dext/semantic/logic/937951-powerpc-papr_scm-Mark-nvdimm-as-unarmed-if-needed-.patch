@@ -1,0 +1,46 @@
+From adb68c38d8d49a3d60805479c558649bb2182473 Mon Sep 17 00:00:00 2001
+From: Vaibhav Jain <vaibhav@linux.ibm.com>
+Date: Mon, 29 Mar 2021 17:01:03 +0530
+Subject: [PATCH 937951/993600] powerpc/papr_scm: Mark nvdimm as unarmed if
+ needed during probe
+
+In case an nvdimm is found to be unarmed during probe then set its
+NDD_UNARMED flag before nvdimm_create(). This would enforce a
+read-only access to the ndimm region. Presently even if an nvdimm is
+unarmed its not marked as read-only on ppc64 guests.
+
+The patch updates papr_scm_nvdimm_init() to force query of nvdimm
+health via __drc_pmem_query_health() and if nvdimm is found to be
+unarmed then set the nvdimm flag ND_UNARMED for nvdimm_create().
+
+Signed-off-by: Vaibhav Jain <vaibhav@linux.ibm.com>
+Reviewed-by: Aneesh Kumar K.V <aneesh.kumar@linux.ibm.com>
+Signed-off-by: Michael Ellerman <mpe@ellerman.id.au>
+Link: https://lore.kernel.org/r/20210329113103.476760-1-vaibhav@linux.ibm.com
+---
+ arch/powerpc/platforms/pseries/papr_scm.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/arch/powerpc/platforms/pseries/papr_scm.c b/arch/powerpc/platforms/pseries/papr_scm.c
+index 48de21902116..ef26fe40efb0 100644
+--- a/arch/powerpc/platforms/pseries/papr_scm.c
++++ b/arch/powerpc/platforms/pseries/papr_scm.c
+@@ -947,6 +947,15 @@ static int papr_scm_nvdimm_init(struct papr_scm_priv *p)
+ 	dimm_flags = 0;
+ 	set_bit(NDD_LABELING, &dimm_flags);
+ 
++	/*
++	 * Check if the nvdimm is unarmed. No locking needed as we are still
++	 * initializing. Ignore error encountered if any.
++	 */
++	__drc_pmem_query_health(p);
++
++	if (p->health_bitmap & PAPR_PMEM_UNARMED_MASK)
++		set_bit(NDD_UNARMED, &dimm_flags);
++
+ 	p->nvdimm = nvdimm_create(p->bus, p, papr_nd_attr_groups,
+ 				  dimm_flags, PAPR_SCM_DIMM_CMD_MASK, 0, NULL);
+ 	if (!p->nvdimm) {
+-- 
+2.17.1
+

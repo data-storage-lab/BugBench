@@ -1,0 +1,42 @@
+From 5b8e64f1ada37574b9ab124e1414af2adf688a19 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Uwe=20Kleine-K=C3=B6nig?= <uwe@kleine-koenig.org>
+Date: Fri, 5 Feb 2021 23:28:38 +0100
+Subject: [PATCH 921698/993600] device-dax: Prevent registering drivers without
+ probe callback
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The bus probe function dax_bus_probe() calls the probe callback without
+checking it to be non-NULL. Prevent a NULL pointer exception if a driver
+without a probe function is registered by refusing to register this
+driver.
+
+Signed-off-by: Uwe Kleine-König <uwe@kleine-koenig.org>
+Link: https://lore.kernel.org/r/20210205222842.34896-2-uwe@kleine-koenig.org
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/dax/bus.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/drivers/dax/bus.c b/drivers/dax/bus.c
+index 3003558c1a8b..2b29728ec2fd 100644
+--- a/drivers/dax/bus.c
++++ b/drivers/dax/bus.c
+@@ -1392,6 +1392,13 @@ int __dax_driver_register(struct dax_device_driver *dax_drv,
+ 	struct device_driver *drv = &dax_drv->drv;
+ 	int rc = 0;
+ 
++	/*
++	 * dax_bus_probe() calls dax_drv->probe() unconditionally.
++	 * So better be safe than sorry and ensure it is provided.
++	 */
++	if (!dax_drv->probe)
++		return -EINVAL;
++
+ 	INIT_LIST_HEAD(&dax_drv->ids);
+ 	drv->owner = module;
+ 	drv->name = mod_name;
+-- 
+2.17.1
+

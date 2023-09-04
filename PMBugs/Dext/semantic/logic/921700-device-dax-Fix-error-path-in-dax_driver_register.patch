@@ -1,0 +1,44 @@
+From e307bf11c5198dbc0c9de0694c3e85c681648df6 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Uwe=20Kleine-K=C3=B6nig?= <uwe@kleine-koenig.org>
+Date: Fri, 5 Feb 2021 23:28:40 +0100
+Subject: [PATCH 921700/993600] device-dax: Fix error path in
+ dax_driver_register
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The static variable match_always_count is supposed to track if there is
+a driver registered that has .match_always set. If driver_register()
+fails, the previous increment must be undone.
+
+Signed-off-by: Uwe Kleine-König <uwe@kleine-koenig.org>
+Link: https://lore.kernel.org/r/20210205222842.34896-4-uwe@kleine-koenig.org
+Signed-off-by: Dan Williams <dan.j.williams@intel.com>
+---
+ drivers/dax/bus.c | 10 +++++++++-
+ 1 file changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/dax/bus.c b/drivers/dax/bus.c
+index ef53da441c5d..d2419e88073a 100644
+--- a/drivers/dax/bus.c
++++ b/drivers/dax/bus.c
+@@ -1420,7 +1420,15 @@ int __dax_driver_register(struct dax_device_driver *dax_drv,
+ 	mutex_unlock(&dax_bus_lock);
+ 	if (rc)
+ 		return rc;
+-	return driver_register(drv);
++
++	rc = driver_register(drv);
++	if (rc && dax_drv->match_always) {
++		mutex_lock(&dax_bus_lock);
++		match_always_count -= dax_drv->match_always;
++		mutex_unlock(&dax_bus_lock);
++	}
++
++	return rc;
+ }
+ EXPORT_SYMBOL_GPL(__dax_driver_register);
+ 
+-- 
+2.17.1
+
