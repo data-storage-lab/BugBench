@@ -5,6 +5,8 @@ This repository contains real-world bug cases curated by Data Storage Lab@ISU an
 About the Name: BugBench<sup>k</sup>  was inspired by the classic work "[BugBench: Benchmarks for Evaluating Bug Detection Tools](https://www.cs.umd.edu/~pugh/BugWorkshop05/papers/63-lu.pdf)" by [Shan Lu](http://people.cs.uchicago.edu/~shanlu/), Zhenmin Li, Feng Qin, Lin Tan, Pin Zhou and Yuanyuan Zhou at [BugWorkshop'05](https://www.cs.umd.edu/~pugh/BugWorkshop05/), which characterized a set of bugs in user-level applications. The "<sup>k</sup>" denotes the fact that the initial set of bug cases curated in BugBench<sup>k</sup> were kernel-level bugs.  
 
 BugBench<sup>k</sup> Related Publications:
+- "[Understanding Persistent-Memory Related Issues in the Linux Kernel](https://arxiv.org/abs/2307.04095)",
+Om Rameshwar Gatla, Duo Zhang, Wei Xu, and Mai Zheng, ACM Transactions on Storage (TOS), 2023.
 
 - "[ConfD: Analyzing Configuration Dependencies of File Systems for Fun and Profit](https://www.usenix.org/conference/fast23/presentation/mahmud)",
 Tabassum Mahmud, Om Rameshwar Gatla, Duo Zhang, Carson Love, Ryan Bumann, and Mai Zheng, Proceedings of the 21st USENIX Conference on File and Storage Technologies ([FAST](https://www.usenix.org/conference/fast23)), 2023.
@@ -23,7 +25,7 @@ BenchCouncil Transactions on Benchmarks, Standards and Evaluation ([TBench](http
 
 ## Persistent Memory Bugs in the Linux Kernel ##
 
-The "PMBugs" folder contains the dataset studied in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel](https://dl.acm.org/doi/pdf/10.1145/3456727.3463783)", which was published in the Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021, and in our journal "Understanding Persistent-Memory Related Issues in the Linux Kernel", which was published in ACM Transactions on Storage (TOS),2022.
+The "PMBugs" folder contains the dataset studied in our paper "[A Study of Persistent Memory Bugs in the Linux Kernel](https://dl.acm.org/doi/pdf/10.1145/3456727.3463783)", which was published in the Proceedings of the 14th ACM International Systems and Storage Conference ([SYSTOR](https://www.systor.org/2021/index.html)), 2021, and in our journal "Understanding Persistent-Memory Related Issues in the Linux Kernel", which was published in ACM Transactions on Storage (TOS),2023.
 
 By analyzing 1,350 PM related kernel patches in depth, we derive multiple insights in terms of PM patch categories, PM bug patterns, consequences, and fix
 strategies. Also, we leverage static analyze to identify Persistent Memory Driver issues. We hope our results could contribute to the development of effective PM bug detectors and robust PM-based systems.
